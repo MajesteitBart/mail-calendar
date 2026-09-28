@@ -262,7 +262,7 @@ impl<P: Provider> App<P> {
             .iter()
             .map(|row| (row.account.as_str(), row.mail.key.as_str()))
             .collect();
-        let hidden = self.pending_hidden_keys();
+        let hidden = self.pending_hides();
         let threads: HashSet<&str> = base
             .iter()
             .filter_map(|row| {
@@ -286,7 +286,7 @@ impl<P: Provider> App<P> {
         );
         for member in extra {
             let key = (member.account.as_str(), member.mail.key.as_str());
-            if present.contains(&key) || hidden.contains(&(key.0.to_owned(), key.1.to_owned())) {
+            if present.contains(&key) || hidden.hides(&member) {
                 continue;
             }
             items.push(account_message(in_view, account_rows, &Arc::new(member)));
@@ -294,55 +294,24 @@ impl<P: Provider> App<P> {
         items
     }
 
-    /// Every optimistically-removed `(account, key)`; just archived or deleted, the move not yet
-    /// reflected by a sync. Read-only sibling of the prune in [`cached_rows`](Self::cached_rows),
-    /// so thread completion honours the same hiding without re-running the prune.
-    pub(crate) fn pending_hidden_keys(&self) -> HashSet<(String, String)> {
-        self.pending_removals
-            .lock()
-            .expect("pending-removals mutex poisoned")
-            .clone()
-    }
-
     /// The windowed rows for projection: the [`load_rows`](Self::load_rows) set with any
-    /// **optimistically removed** rows filtered out. A hidden key the store no longer reports is
-    /// pruned here (once the move lands the hint has done its job) so the set self-prunes and a
-    /// message that legitimately returns is shown again. The hot path (nothing hidden) returns
-    /// the shared cache untouched.
+    /// **optimistically removed** rows filtered out. The hides these rows settle are dropped
+    /// here, so a message that legitimately returns is shown again. The hot path (nothing
+    /// hidden) returns the shared cache untouched.
     pub(crate) async fn cached_rows(
         &self,
         accounts: &[AccountId],
         window: usize,
     ) -> Arc<Vec<Arc<MailListRow>>> {
         let base = self.load_rows(accounts, window).await;
-        let mut removals = self
-            .pending_removals
-            .lock()
-            .expect("pending-removals mutex poisoned");
-        if removals.is_empty() {
+        let mut pending = self.lock_hides();
+        if pending.is_empty() {
             return base;
         }
-        // Prune confirmed removals: once the store stops reporting a hidden key, the move has
-        // landed, so drop the hint (a failed edit was already un-hidden by its caller). Only the
-        // accounts actually read can be judged; one absent from this window says nothing.
-        let read: HashSet<&str> = accounts.iter().map(AccountId::as_str).collect();
-        let present: HashSet<(&str, &str)> = base
-            .iter()
-            .map(|row| (row.account.as_str(), row.mail.key.as_str()))
-            .collect();
-        removals.retain(|(account, key)| {
-            !read.contains(account.as_str()) || present.contains(&(account.as_str(), key.as_str()))
-        });
-        let hidden: HashSet<(String, String)> = removals.clone();
-        drop(removals);
+        pending.settle(accounts, &base);
         Arc::new(
             base.iter()
-                .filter(|row| {
-                    !hidden.contains(&(
-                        row.account.as_str().to_owned(),
-                        row.mail.key.as_str().to_owned(),
-                    ))
-                })
+                .filter(|row| !pending.hides(row))
                 .cloned()
                 .collect(),
         )

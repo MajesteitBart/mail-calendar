@@ -47,15 +47,10 @@ impl<P: Provider> App<P> {
         let windowed = base.len() >= window;
         // Honour the optimistic hides, so a message the agent just archived does not reappear in
         // the very next listing while the move is still settling server-side.
-        let hidden = self.pending_hidden_keys();
+        let hidden = self.pending_hides();
         let items: Vec<AccountMessage> = base
             .into_iter()
-            .filter(|row| {
-                !hidden.contains(&(
-                    row.account.as_str().to_owned(),
-                    row.mail.key.as_str().to_owned(),
-                ))
-            })
+            .filter(|row| !hidden.hides(row))
             .map(|row| {
                 let keep = in_folder(&row, folder) && (!unread_only || row.mail.flags.is_unread());
                 AccountMessage {

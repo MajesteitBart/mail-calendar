@@ -61,7 +61,7 @@ impl<P: Provider> App<P> {
         if !self.splice_live_rows(account, upserted, removed) {
             return false;
         }
-        self.remove_confirmed_pending(account, removed);
+        self.lock_hides().settle_commit(account, upserted, removed);
         self.rebuild_live_mailbox_snapshot()
     }
 
@@ -141,18 +141,6 @@ impl<P: Provider> App<P> {
         }
         cached.rows = Arc::new(rows);
         true
-    }
-
-    fn remove_confirmed_pending(&self, account: &AccountId, removed: &[ProviderKey]) {
-        if removed.is_empty() {
-            return;
-        }
-        let account = account.as_str();
-        let removed: HashSet<&str> = removed.iter().map(ProviderKey::as_str).collect();
-        self.pending_removals
-            .lock()
-            .expect("pending-removals mutex poisoned")
-            .retain(|(acct, key)| acct != account || !removed.contains(key.as_str()));
     }
 
     fn rebuild_live_mailbox_snapshot(&self) -> bool {
@@ -251,26 +239,14 @@ impl<P: Provider> App<P> {
     ) -> Option<Vec<AccountMessage>> {
         let cache = self.row_cache.lock().expect("row-cache mutex poisoned");
         let cached = cache.as_ref()?;
-        let hidden = self.live_hidden_keys();
+        let hidden = self.lock_hides();
         Some(
             cached
                 .rows
                 .iter()
-                .filter(|row| {
-                    !hidden.contains(&(
-                        row.account.as_str().to_owned(),
-                        row.mail.key.as_str().to_owned(),
-                    ))
-                })
+                .filter(|row| !hidden.hides(row))
                 .map(|row| account_message(in_view, account_rows, row))
                 .collect(),
         )
-    }
-
-    fn live_hidden_keys(&self) -> HashSet<(String, String)> {
-        self.pending_removals
-            .lock()
-            .expect("pending-removals mutex poisoned")
-            .clone()
     }
 }

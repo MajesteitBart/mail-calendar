@@ -229,7 +229,7 @@ impl<P: Provider> App<P> {
         }
         let present: HashSet<(&str, &str)> =
             hits.iter().map(|hit| (hit.account(), hit.key())).collect();
-        let hidden = self.pending_hidden_keys();
+        let hidden = self.pending_hides();
         let accounts: Vec<AccountId> = mailboxes.iter().map(|(id, _)| id.clone()).collect();
         let started = Instant::now();
         let extra = self
@@ -247,10 +247,7 @@ impl<P: Provider> App<P> {
             .into_iter()
             .filter(|row| {
                 !present.contains(&(row.account.as_str(), row.mail.key.as_str()))
-                    && !hidden.contains(&(
-                        row.account.as_str().to_owned(),
-                        row.mail.key.as_str().to_owned(),
-                    ))
+                    && !hidden.hides(row)
             })
             .map(|row| AccountMessage {
                 outgoing: is_outgoing(&row, owner_email(account_rows, row.account.as_str())),

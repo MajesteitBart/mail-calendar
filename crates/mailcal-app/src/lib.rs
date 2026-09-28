@@ -90,6 +90,7 @@ mod mail_compose_signature;
 mod mail_ops;
 mod mcp_settings;
 mod message_size;
+mod pending_removals;
 mod prefetch;
 mod protocol;
 mod query;
@@ -338,13 +339,11 @@ pub struct App<P> {
     /// authoritative rebuild put them back a beat later. Cleared by
     /// [`load_rows`](Self::load_rows) once the store read repopulates it.
     row_cache_dropped: AtomicBool,
-    /// Messages (by `(account id, provider key)`) hidden from the list **optimistically** the
-    /// instant the user archives/deletes one, so the row leaves the list without waiting for
-    /// the move to land server-side and the re-sync to observe the expunge (IMAP deltas don't
-    /// carry it, and a fresh snapshot can lag a beat). A key stays here only while the store
-    /// still reports the message; [`cached_rows`](crate::App::cached_rows) drops it once the
-    /// store agrees it's gone, so the set self-prunes and a failed edit reappears.
-    pending_removals: Mutex<HashSet<(String, String)>>,
+    /// Messages hidden from the list **optimistically** the instant the user archives, deletes
+    /// or reports one, so the row leaves without waiting for the write to land and a re-sync to
+    /// observe it. Each hide lasts until the store shows the message gone or filed where it was
+    /// sent (`pending_removals`), and a refused write puts its row back.
+    pending_removals: Mutex<pending_removals::PendingRemovals>,
     /// Bumped on every [`invalidate_list_cache`](Self::invalidate_list_cache). A row load
     /// captures this before reading the store and refuses to cache its result if the value
     /// moved while the read was in flight: so a slow pre-sync load can't land after the

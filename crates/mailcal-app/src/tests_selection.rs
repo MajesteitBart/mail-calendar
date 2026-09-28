@@ -10,7 +10,9 @@
 use std::sync::{Arc, Mutex, atomic::Ordering};
 
 use engine_provider::MailEdit;
-use fakes::{FakeProvider, account, app, message, msg, thread_ref, threaded};
+use fakes::{
+    FakeProvider, account, app, listed_subjects, message, msg, open_folder, thread_ref, threaded,
+};
 
 use super::{BulkAction, Intent, RowRef};
 
@@ -76,6 +78,40 @@ async fn archiving_a_selection_moves_every_row_and_syncs_the_account_once() {
     assert!(
         app.mailbox_list().rows.is_empty(),
         "the whole batch left the list",
+    );
+}
+
+#[tokio::test]
+async fn an_archived_selection_that_keeps_its_keys_is_listed_in_the_archive() {
+    // The batch twin of the single-row case: a provider that keeps each key across the move
+    // reports the same keys in Archive, and the batch hide must give way to that.
+    let provider =
+        FakeProvider::with_archive(vec![message("m1", "a", "One"), message("m2", "a", "Two")]);
+    let delivered = provider.late_delivery();
+    let surfaces = Arc::new(Mutex::new(Vec::new()));
+    let app = app(vec![account("acct-1", provider)], &surfaces);
+    app.dispatch(Intent::RefreshMail).await;
+    delivered.lock().unwrap().extend([
+        message("m1", "archive", "One"),
+        message("m2", "archive", "Two"),
+    ]);
+
+    app.dispatch(Intent::ActOnSelection {
+        rows: rows("acct-1", &["m1", "m2"]),
+        action: BulkAction::Archive,
+    })
+    .await;
+
+    app.dispatch(open_folder("acct-1", "archive")).await;
+    assert_eq!(
+        listed_subjects(&app.mailbox_list()),
+        ["One", "Two"],
+        "the whole batch is listed in the Archive it now sits in",
+    );
+    app.dispatch(open_folder("acct-1", "a")).await;
+    assert!(
+        listed_subjects(&app.mailbox_list()).is_empty(),
+        "and none of it is back in the inbox",
     );
 }
 

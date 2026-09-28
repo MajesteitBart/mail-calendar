@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex, atomic::Ordering};
 
 use engine_api::{Provider, ReportVerdict};
-use fakes::{FakeProvider, account, app, message, msg};
+use fakes::{FakeProvider, account, app, listed_subjects, message, msg, open_folder};
 
 use crate::MailActionError;
 
@@ -69,6 +69,42 @@ async fn marking_not_spam_reports_the_correction_back_to_the_inbox() {
         report.destination.key().as_str(),
         "a",
         "not-junk files it back in the Inbox, not in Junk",
+    );
+}
+
+#[tokio::test]
+async fn a_message_reported_by_mistake_can_be_found_in_junk_and_brought_back() {
+    // Every transport but IMAP keeps the key when a report files the message, so the store sees
+    // the same key in a new folder. Neither the report nor its correction may leave the message
+    // hidden from the folder it was filed in: that is where the user goes to undo it.
+    let provider = FakeProvider::with(vec![message("m1", "a", "Cheap watches")]).with_junk_folder();
+    let delivered = provider.late_delivery();
+    let surfaces = Arc::new(Mutex::new(Vec::new()));
+    let app = app(vec![account("acct-1", provider)], &surfaces);
+    app.dispatch(crate::Intent::RefreshMail).await;
+
+    *delivered.lock().unwrap() = vec![message("m1", "junk", "Cheap watches")];
+    app.dispatch(crate::Intent::MarkAsSpam {
+        message: msg("acct-1", "m1"),
+    })
+    .await;
+    app.dispatch(open_folder("acct-1", "junk")).await;
+    assert_eq!(
+        listed_subjects(&app.mailbox_list()),
+        ["Cheap watches"],
+        "the reported message is listed in Junk, where the user goes to undo it",
+    );
+
+    *delivered.lock().unwrap() = vec![message("m1", "a", "Cheap watches")];
+    app.dispatch(crate::Intent::MarkAsNotSpam {
+        message: msg("acct-1", "m1"),
+    })
+    .await;
+    app.dispatch(open_folder("acct-1", "a")).await;
+    assert_eq!(
+        listed_subjects(&app.mailbox_list()),
+        ["Cheap watches"],
+        "and once it is not spam after all, it is back in the inbox",
     );
 }
 

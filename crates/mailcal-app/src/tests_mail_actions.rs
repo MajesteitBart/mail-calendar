@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex, atomic::Ordering};
 
 use engine_provider::MailEdit;
-use fakes::{FakeProvider, account, app, message, msg};
+use fakes::{FakeProvider, account, app, listed_subjects, message, msg, open_folder};
 
 use crate::{MailActionError, SendActionError};
 
@@ -119,6 +119,40 @@ async fn an_agent_action_takes_the_same_door_as_the_user() {
             .iter()
             .any(|row| format!("{row:?}").contains("m1")),
         "the row left the user's own list, exactly as it does on a swipe",
+    );
+}
+
+#[tokio::test]
+async fn an_archived_message_that_keeps_its_key_is_listed_in_the_archive() {
+    // JMAP, Gmail and Graph keep a message's key across a move and change only where it is
+    // filed. The hide that takes the row out of the inbox at once must not also keep it out of
+    // the Archive it was filed in, or the user cannot find what they just archived.
+    let provider = FakeProvider::with_archive(vec![message("m1", "a", "Hello")]);
+    let delivered = provider.late_delivery();
+    let surfaces = Arc::new(Mutex::new(Vec::new()));
+    let app = app(vec![account("acct-1", provider)], &surfaces);
+    app.dispatch(crate::Intent::RefreshMail).await;
+    // What the server reports on the sync that follows the move: the same key, now in Archive.
+    delivered
+        .lock()
+        .unwrap()
+        .push(message("m1", "archive", "Hello"));
+
+    app.dispatch(crate::Intent::Archive {
+        message: msg("acct-1", "m1"),
+    })
+    .await;
+
+    app.dispatch(open_folder("acct-1", "archive")).await;
+    assert_eq!(
+        listed_subjects(&app.mailbox_list()),
+        ["Hello"],
+        "the archived message is listed in the Archive it now sits in",
+    );
+    app.dispatch(open_folder("acct-1", "a")).await;
+    assert!(
+        listed_subjects(&app.mailbox_list()).is_empty(),
+        "and it has left the inbox",
     );
 }
 

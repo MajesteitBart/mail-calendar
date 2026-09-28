@@ -169,10 +169,7 @@ impl<P: Provider> App<P> {
         // …and whether its folder tree was shut, so a re-add opens showing its folders rather
         // than inheriting a collapse nobody remembers making (docs/folder-pane.md).
         self.remove_account_expansion(acct);
-        self.pending_removals
-            .lock()
-            .expect("pending-removals mutex poisoned")
-            .retain(|(a, _)| a != acct);
+        self.lock_hides().forget_account(id);
         self.attempted_folders
             .lock()
             .expect("attempted-folders mutex poisoned")

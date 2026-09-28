@@ -13,6 +13,7 @@ use engine_api::{
     AccountId, Draft, EmailAddress, MailEdit, MailboxRole, Message, MessageIdHeader, MessageReport,
     Provider, ProviderKey, ReportVerdict,
 };
+use engine_core::ids::MailboxId;
 
 use crate::{
     App, BulkAction,
@@ -41,6 +42,17 @@ pub(super) enum MailWrite {
     Edit(MailEdit),
     /// A report to the provider, which files the message itself.
     Report(MessageReport),
+}
+
+impl MailWrite {
+    /// The mailbox the write files the message in; `None` for a permanent delete.
+    fn destination(&self) -> Option<&MailboxId> {
+        match self {
+            Self::Edit(MailEdit::MoveTo { destination, .. }) => Some(destination),
+            Self::Edit(_) => None,
+            Self::Report(report) => Some(&report.destination),
+        }
+    }
 }
 
 /// Whether a mail write drives its own account-wide re-sync, or leaves it to the caller.
@@ -195,8 +207,8 @@ impl<P: Provider> App<P> {
     /// Removes `message` from the list **optimistically**: hides the row now (so the list
     /// updates the instant the user archives/deletes), applies `write` (a Trash/Archive move, a
     /// permanent delete, or a report) through the outbox, then re-syncs. The hide persists
-    /// across that re-sync (even when the server hasn't reflected the expunge yet) and
-    /// self-prunes once the store agrees the message is gone (see `cached_messages`). A
+    /// across that re-sync (even when the server hasn't reflected the move yet) and lifts once
+    /// the store shows the message gone or filed where `write` sent it (`pending_removals`). A
     /// rejected write drops the hide so the row comes back. Returns whether the write applied.
     pub(super) async fn remove_optimistically(
         &self,
@@ -204,14 +216,11 @@ impl<P: Provider> App<P> {
         write: MailWrite,
         refresh: WriteRefresh,
     ) -> bool {
-        let id = (
-            message.account.as_str().to_owned(),
-            message.key.as_str().to_owned(),
+        self.hide_optimistically(
+            &message.account,
+            std::slice::from_ref(&message.key),
+            write.destination(),
         );
-        self.pending_removals
-            .lock()
-            .expect("pending-removals mutex poisoned")
-            .insert(id.clone());
         // Republish immediately so the row leaves the list before the network round-trip.
         self.rebuild_snapshot().await;
         let applied = self.apply_only(&message.account, &write).await;
@@ -220,13 +229,10 @@ impl<P: Provider> App<P> {
             // so the row returns on the re-sync below.
             log::warn!(
                 "remove: write didn't apply for key {} on account {}; restoring the row",
-                id.1,
-                id.0,
+                message.key.as_str(),
+                message.account.as_str(),
             );
-            self.pending_removals
-                .lock()
-                .expect("pending-removals mutex poisoned")
-                .remove(&id);
+            self.restore_row(&message.account, &message.key);
         }
         if refresh == WriteRefresh::Immediate {
             self.refresh_after_write(&message.account).await;

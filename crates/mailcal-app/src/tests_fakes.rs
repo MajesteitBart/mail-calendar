@@ -177,6 +177,21 @@ pub(super) fn flat_subjects(snapshot: &MailboxListSnapshot) -> Vec<String> {
         .collect()
 }
 
+/// The subject of every row listed, flat or threaded, sorted: what a user would read down the
+/// list whichever grouping they use.
+pub(super) fn listed_subjects(snapshot: &MailboxListSnapshot) -> Vec<String> {
+    let mut subjects: Vec<String> = snapshot
+        .rows
+        .iter()
+        .map(|row| match row {
+            SnapshotRow::Flat(r) => r.subject.clone(),
+            SnapshotRow::Thread(r) => r.subject.clone(),
+        })
+        .collect();
+    subjects.sort();
+    subjects
+}
+
 pub(super) fn flat_previews(snapshot: &MailboxListSnapshot) -> Vec<String> {
     snapshot
         .rows
