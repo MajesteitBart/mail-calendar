@@ -231,6 +231,11 @@ impl ToolContext {
                 known.insert(found.to_ascii_lowercase());
             }
         }
+        // The user's own addresses, exactly, so "email me the summary" is not refused. The domain
+        // around them still qualifies nobody.
+        for account in self.backend.accounts().await {
+            known.insert(account.email.to_ascii_lowercase());
+        }
         policy::recipients_are_known(&recipients, &known).map_err(ToolFailure::Refused)
     }
 }

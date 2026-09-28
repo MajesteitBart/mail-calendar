@@ -95,7 +95,8 @@ pub fn fence(body: &str) -> String {
 ///
 /// Pure, deterministic and case-insensitive, which is why it is the control the design leans on
 /// rather than the fence. `known` is the union of what the backend's index returned for each
-/// recipient; the caller does the lookups so this stays testable without a backend.
+/// recipient and the user's own account addresses, exactly; the caller does the lookups so this
+/// stays testable without a backend.
 ///
 /// # Errors
 ///

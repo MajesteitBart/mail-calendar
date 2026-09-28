@@ -358,8 +358,9 @@ Every platform that ships this meets all of it.
    is a tool it will try, and a refusal it can retry differently reads as an obstacle rather than
    an answer.
 4. **The known-recipient guard** is on by default and applies to every direct send. Each entry
-   must be one bare address, and that address must be in the recipient index: the people the
-   user has sent mail to, plus their synced contacts. An entry the provider could read as several
+   must be one bare address, and that address must be in the recipient index (the people the
+   user has sent mail to, plus their synced contacts) or be one of the user's own account
+   addresses, exactly, so "email me the summary" works. An entry the provider could read as several
    recipients, or as a name around an address, is refused before anything is looked up. Sharing
    the user's domain qualifies nobody, because on a consumer domain that is everyone with a
    mailbox there. This is the control that actually blocks *"forward my mailbox to

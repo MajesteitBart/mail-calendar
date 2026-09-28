@@ -353,6 +353,23 @@ async fn send_message_refuses_a_stranger_at_the_users_own_domain() {
 }
 
 #[tokio::test]
+async fn send_message_accepts_the_users_own_address() {
+    // "Email me the summary": the user's own address is known whether or not the index holds it.
+    let (backend, recorder) = fake();
+    let ctx = ctx_with(backend, sending(&["work"]));
+
+    call(
+        &ctx,
+        "send_message",
+        json!({"account": "work", "to": ["Me@Private.example"], "subject": "Summary",
+               "body_text": "..."}),
+    )
+    .await
+    .expect("a message to the user's own address goes through");
+    assert_eq!(recorder.lock().unwrap().sends.len(), 1);
+}
+
+#[tokio::test]
 async fn send_message_without_an_account_sends_from_the_one_the_user_exposed() {
     // Naming no account must not fall through to the app's own default: that is whichever
     // account is on screen, and the user need not have exposed it.
