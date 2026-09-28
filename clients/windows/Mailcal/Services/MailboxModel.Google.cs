@@ -75,7 +75,7 @@ public sealed partial class MailboxModel
             SetupError = null;
             NeedsSetup = false;
             AddingAccount = false;
-            Log.Info($"google account added: {row.Email}");
+            Log.Info("google account added");
             SenderNamePrompt = row.Id;
             // This route never touches AddAccountAsync, so the pass is owed here: without it the
             // account stays on this device until the next launch, and its card in Settings draws

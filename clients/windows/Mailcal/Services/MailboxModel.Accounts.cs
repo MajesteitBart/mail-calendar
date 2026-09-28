@@ -229,7 +229,7 @@ public sealed partial class MailboxModel
             SetupError = null;
             NeedsSetup = false;
             AddingAccount = false;
-            Log.Info($"microsoft account added: {row.Email}");
+            Log.Info("microsoft account added");
             SenderNamePrompt = row.Id;
             // This route never touches AddAccountAsync, so the pass is owed here: without it the
             // account stays on this device until the next launch, and its card in Settings draws
@@ -385,7 +385,7 @@ public sealed partial class MailboxModel
                 SetupError = null;
                 NeedsSetup = false;
                 AddingAccount = false;
-                Log.Info($"account added: {row.Email}");
+                Log.Info("account added");
                 // Ask what to call the sender of this account's mail (docs/sending.md).
                 SenderNamePrompt = row.Id;
                 // The core synced the new account and refreshed the snapshot (the observer
@@ -444,7 +444,7 @@ public sealed partial class MailboxModel
             // operations; the observer refreshes the sidebar + list as the snapshot rebuilds.
             // The core erases the stored credential too, through the port it wrote it through.
             await Task.Run(() => _app!.RemoveAccount(id));
-            Log.Info($"account removed: {id}");
+            Log.Info("account removed");
         }
         catch (Exception ex)
         {
