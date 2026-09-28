@@ -43,6 +43,10 @@ const PYTHON_CHECKS: &[(&str, &str)] = &[
     ("user docs (contract)", "scripts/ci/check_user_docs.py"),
 ];
 
+/// What a host without a Python 3 is told to install.
+const NO_PYTHON: &str =
+    "Python 3, which is not installed (a Microsoft Store alias is not one): https://www.python.org";
+
 /// The in-process contract checks the gate runs before the licensing lint, in order.
 ///
 /// Named once because `all` and `print_list` both walk them: a second hand-kept copy is how a
@@ -130,8 +134,12 @@ pub(crate) fn all(root: &Path, clients: bool, palette: &Palette) -> Vec<Step> {
         &["lint", "--lines"],
     ));
 
+    let python = gate_exec::python3();
     for (label, script) in PYTHON_CHECKS {
-        out.push(run.external(label, "python3", &[script]));
+        out.push(match python {
+            Some(python) => run.external(label, python, &[script]),
+            None => run.refused(label, NO_PYTHON),
+        });
     }
 
     for name in LATE_CHECKS {
@@ -139,27 +147,31 @@ pub(crate) fn all(root: &Path, clients: bool, palette: &Palette) -> Vec<Step> {
     }
 
     // The script suites, discovered so a new helper's tests are picked up by existing.
-    out.push(run.sequence(
-        "script tests (dev + ci helpers)",
-        root,
-        &[
-            (
-                "python3",
-                &[
-                    "-m",
-                    "unittest",
-                    "discover",
-                    "-s",
-                    "scripts/dev/tests",
-                    "-q",
-                ],
-            ),
-            (
-                "python3",
-                &["-m", "unittest", "discover", "-s", "scripts/ci/tests", "-q"],
-            ),
-        ],
-    ));
+    let scripts = "script tests (dev + ci helpers)";
+    out.push(match python {
+        Some(python) => run.sequence(
+            scripts,
+            root,
+            &[
+                (
+                    python,
+                    &[
+                        "-m",
+                        "unittest",
+                        "discover",
+                        "-s",
+                        "scripts/dev/tests",
+                        "-q",
+                    ],
+                ),
+                (
+                    python,
+                    &["-m", "unittest", "discover", "-s", "scripts/ci/tests", "-q"],
+                ),
+            ],
+        ),
+        None => run.refused(scripts, NO_PYTHON),
+    });
     out.push(run.composer());
 
     // The expensive pair, last, because everything above can fail in seconds instead.

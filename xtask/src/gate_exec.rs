@@ -36,7 +36,7 @@ impl<'a> Runner<'a> {
     }
 
     /// Reports a step that could not run.
-    fn refused(&self, label: &str, what: &str) -> Step {
+    pub(crate) fn refused(&self, label: &str, what: &str) -> Step {
         eprintln!(
             "{}!! {label} needs {what}{}",
             self.palette.red, self.palette.reset
@@ -301,6 +301,27 @@ pub(crate) fn nightly_channel(root: &Path) -> Result<String, String> {
     Err("no [toolchain] channel in rust-nightly.toml".to_owned())
 }
 
+/// The Python 3 interpreter this host would actually run, found by asking each name what it is.
+///
+/// Windows puts a Microsoft Store alias on the path under both names. It exits non-zero with an
+/// install hint, so a name that resolves is not evidence of a Python, and calling it anyway turns
+/// "not installed" into three checks that appear to have failed.
+pub(crate) fn python3() -> Option<&'static str> {
+    ["python3", "python"].into_iter().find(|name| {
+        Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success() && says_python3(&out.stdout, &out.stderr))
+    })
+}
+
+/// Whether a `--version` answer is a Python 3's. Python 2 printed its version to stderr.
+fn says_python3(stdout: &[u8], stderr: &[u8]) -> bool {
+    [stdout, stderr]
+        .iter()
+        .any(|text| String::from_utf8_lossy(text).trim_start().starts_with("Python 3"))
+}
+
 /// Whether a program can be run, by asking it rather than by looking for its name.
 ///
 /// A probe that stops at "is there something called this on the path" passes on Windows and fails
@@ -312,4 +333,20 @@ fn runnable(tool: &str) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::says_python3;
+
+    #[test]
+    fn only_a_python_3_answer_counts() {
+        assert!(says_python3(b"Python 3.13.1\n", b""));
+        assert!(!says_python3(b"", b"Python 2.7.18\n"));
+        // What the Microsoft Store alias prints instead of a version.
+        assert!(!says_python3(
+            b"",
+            b"Python was not found; run without arguments to install from the Microsoft Store",
+        ));
+    }
 }

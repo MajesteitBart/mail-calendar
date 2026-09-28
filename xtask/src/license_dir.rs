@@ -116,7 +116,7 @@ fn the_two_texts_agree(root: &Path) -> bool {
     let source = root.join(DIR).join("LICENSE.md");
     let mirror = root.join(MIRROR);
     match (std::fs::read(&source), std::fs::read(&mirror)) {
-        (Ok(a), Ok(b)) if a == b => true,
+        (Ok(a), Ok(b)) if same_text(&a, &b) => true,
         (Ok(_), Ok(_)) => {
             eprintln!(
                 "ERROR: {DIR}/LICENSE.md and {MIRROR} have drifted. Copy one over the other."
@@ -129,6 +129,13 @@ fn the_two_texts_agree(root: &Path) -> bool {
             false
         }
     }
+}
+
+/// Equal as text, whatever the line endings. A Windows checkout with `core.autocrlf` writes the
+/// `.txt` mirror with CRLF while `.gitattributes` keeps the `.md` at LF, and that is not drift.
+fn same_text(a: &[u8], b: &[u8]) -> bool {
+    let lf = |bytes: &[u8]| String::from_utf8_lossy(bytes).replace("\r\n", "\n");
+    lf(a) == lf(b)
 }
 
 /// The `default-members = [ … ]` block, as written.
@@ -184,7 +191,15 @@ fn split_hit(hit: &str) -> Option<(&str, &str, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_members, is_the_members_line, is_the_optional_dependency, split_hit};
+    use super::{
+        default_members, is_the_members_line, is_the_optional_dependency, same_text, split_hit,
+    };
+
+    #[test]
+    fn line_endings_are_not_drift_but_words_are() {
+        assert!(same_text(b"one\ntwo\n", b"one\r\ntwo\r\n"));
+        assert!(!same_text(b"one\ntwo\n", b"one\r\nthree\r\n"));
+    }
 
     #[test]
     fn reads_the_default_members_block() {
