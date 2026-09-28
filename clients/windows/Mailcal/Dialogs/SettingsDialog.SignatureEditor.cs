@@ -108,7 +108,19 @@ public sealed partial class SettingsDialog
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var addImage = new Button { Content = L10n.SettingsSignaturesInsertImage() };
-        addImage.Click += async (_, _) => await InsertSignatureImageAsync(host, imageError);
+        addImage.Click += async (_, _) =>
+        {
+            // One picker at a time: a second one opened over the first throws.
+            addImage.IsEnabled = false;
+            try
+            {
+                await InsertSignatureImageAsync(host, imageError);
+            }
+            finally
+            {
+                addImage.IsEnabled = true;
+            }
+        };
         actions.Children.Add(addImage);
         panel.Children.Add(actions);
         panel.Children.Add(imageError);
@@ -176,19 +188,31 @@ public sealed partial class SettingsDialog
         Apply(() => _editingSignature = null);
     }
 
+    // Nothing thrown here may leave the click handler: an exception out of it ends the process,
+    // and the signature being edited with it.
     private async Task InsertSignatureImageAsync(EditorWebViewHost host, TextBlock imageError)
     {
         imageError.Visibility = Visibility.Collapsed;
-        var picker = new FileOpenPicker();
-        foreach (var extension in new[] { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp" })
+        StorageFile? file;
+        try
         {
-            picker.FileTypeFilter.Add(extension);
+            var picker = new FileOpenPicker();
+            foreach (var extension in new[] { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp" })
+            {
+                picker.FileTypeFilter.Add(extension);
+            }
+            if (App.MainWindow is not null)
+            {
+                InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
+            }
+            file = await picker.PickSingleFileAsync();
         }
-        if (App.MainWindow is not null)
+        catch (Exception ex)
         {
-            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
+            Log.Warn($"signatures: the image picker failed ({ex.GetType().Name} 0x{ex.HResult:X8})");
+            Show(imageError, L10n.SettingsSignaturesImageFailed());
+            return;
         }
-        var file = await picker.PickSingleFileAsync();
         if (file is null || string.IsNullOrEmpty(file.Path))
         {
             return;
@@ -196,10 +220,19 @@ public sealed partial class SettingsDialog
         switch (await ReadSignatureImageAsync(file))
         {
             case SignatureImageOutcome.DataUrl picked:
-                await host.RunAsync(
-                    "window.insertSignatureImage("
-                    + EditorWebViewHost.Arg(SignatureImagePayload(picked))
-                    + ")");
+                try
+                {
+                    await host.RunAsync(
+                        "window.insertSignatureImage("
+                        + EditorWebViewHost.Arg(SignatureImagePayload(picked))
+                        + ")");
+                }
+                catch (Exception ex)
+                {
+                    // The editor went away while the picker was open.
+                    Log.Warn($"signatures: couldn't insert the picked image ({ex.GetType().Name})");
+                    Show(imageError, L10n.SettingsSignaturesImageFailed());
+                }
                 break;
             case SignatureImageOutcome.TooLarge tooLarge:
                 Show(imageError, L10n.SettingsSignaturesImageTooLarge(

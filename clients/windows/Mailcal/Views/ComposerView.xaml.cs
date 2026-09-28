@@ -57,6 +57,9 @@ public sealed partial class ComposerView : UserControl
     /// the user can trigger that talks to the editor gates on this.</summary>
     private bool _editorReady;
 
+    /// <summary>Whether the file picker is open.</summary>
+    private bool _picking;
+
     /// <summary>Initialises the control.</summary>
     public ComposerView()
     {
@@ -185,7 +188,8 @@ public sealed partial class ComposerView : UserControl
     /// "Discard draft?" prompt turns on. True as soon as a header field is edited; otherwise the
     /// editor document is compared against the seed it opened with, so a reply that merely carries
     /// its quoted original does NOT count as dirty until something is actually written above it
-    /// (and flipping the quote-style toggle, which rewrites the document, does).
+    /// (and flipping the quote-style toggle, which rewrites the document, does). A message withdrawn
+    /// from the Outbox is dirty from the start, because this composer is its only copy.
     /// <para>The attachment count is measured against what the composer opened with, which is not
     /// the same as zero. A forward's staged originals are still in the mailbox, so abandoning one
     /// loses nothing and must not be worth a prompt; a share's files the user chose in Explorer and
@@ -194,7 +198,7 @@ public sealed partial class ComposerView : UserControl
     /// </summary>
     internal async Task<bool> IsDirtyAsync()
     {
-        if (_headersDirty || _attachments.Count != _baselineAttachments)
+        if (_request?.HoldsOnlyCopy == true || _headersDirty || _attachments.Count != _baselineAttachments)
         {
             return true;
         }
@@ -317,7 +321,15 @@ public sealed partial class ComposerView : UserControl
             QuoteLineHeaderRadio.IsChecked == true
                 ? QuoteStyleChoice.LineAndHeader
                 : QuoteStyleChoice.Indented);
-        await _editor.RunAsync($"window.setComposerQuoteStyle({EditorWebViewHost.Arg(token)})");
+        try
+        {
+            await _editor.RunAsync($"window.setComposerQuoteStyle({EditorWebViewHost.Arg(token)})");
+        }
+        catch (Exception ex)
+        {
+            // The quote keeps its previous style; the message itself is untouched.
+            Log.Warn($"composer: couldn't restyle the quote ({ex.GetType().Name})");
+        }
     }
 
     private Task<string?> ReadDocumentAsync() => _editor.ReadStringAsync("composerDocument()");
@@ -335,26 +347,56 @@ public sealed partial class ComposerView : UserControl
         }
     }
 
+    // One picker at a time, and nothing it throws leaves this handler. A second picker opened over
+    // the first throws, and an exception out of an async void handler ends the process, taking the
+    // message being written with it.
     private async void OnAttachFiles(object sender, RoutedEventArgs e)
     {
-        var picker = new FileOpenPicker();
-        picker.FileTypeFilter.Add("*");
-        if (App.MainWindow is not null)
+        if (_picking)
         {
-            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
+            return;
         }
-        var files = await picker.PickMultipleFilesAsync();
-        foreach (var file in files)
+        _picking = true;
+        try
         {
-            if (string.IsNullOrEmpty(file.Path))
+            var picker = new FileOpenPicker();
+            picker.FileTypeFilter.Add("*");
+            InitializeWithWindow.Initialize(picker, OwnerWindow());
+            var files = await picker.PickMultipleFilesAsync();
+            foreach (var file in files)
             {
-                continue;
+                if (string.IsNullOrEmpty(file.Path))
+                {
+                    continue;
+                }
+                _attachments.Add(new PickedComposerAttachment(
+                    new ComposerFileAttachment(file.Path, file.Name, MediaType(file))));
             }
-            _attachments.Add(new PickedComposerAttachment(
-                new ComposerFileAttachment(file.Path, file.Name, MediaType(file))));
+            AttachmentList.ItemsSource = null;
+            AttachmentList.ItemsSource = _attachments;
         }
-        AttachmentList.ItemsSource = null;
-        AttachmentList.ItemsSource = _attachments;
+        catch (Exception ex)
+        {
+            Log.Warn($"composer: the file picker failed ({ex.GetType().Name} 0x{ex.HResult:X8})");
+            ShowError(L10n.ComposeAttachFailed());
+        }
+        finally
+        {
+            _picking = false;
+        }
+    }
+
+    // The window this composer is in, so the picker opens over the draft it adds to: a composer
+    // window's picker parented to the main window opens behind the draft the user is looking at.
+    private IntPtr OwnerWindow()
+    {
+        if (XamlRoot?.ContentIslandEnvironment is { } island
+            && Microsoft.UI.Win32Interop.GetWindowFromWindowId(island.AppWindowId) is var hwnd
+            && hwnd != IntPtr.Zero)
+        {
+            return hwnd;
+        }
+        return App.MainWindow is { } main ? WindowNative.GetWindowHandle(main) : IntPtr.Zero;
     }
 
     private void OnRemoveAttachment(object sender, RoutedEventArgs e)

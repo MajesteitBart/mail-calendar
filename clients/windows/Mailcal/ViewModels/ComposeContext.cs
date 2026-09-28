@@ -57,6 +57,9 @@ namespace Allodia.Mailcal.ViewModels;
 /// the composer opens saying so. It travels beside <paramref name="Attachments"/> because an empty
 /// list means opposite things either way: nothing was attached, or everything was and none of it
 /// could be read.</param>
+/// <param name="HoldsOnlyCopy">Whether this composer is the only place the message exists: one the
+/// core withdrew from the Outbox for editing (docs/sending.md). It counts as a draft from the
+/// moment it opens, so nothing takes it away without asking.</param>
 // Internal, not public: `Attachments` carries the generated `ComposerFileAttachment`, and every
 // record the C# bindgen emits is internal. The public types in this directory are the ones XAML
 // binds to; this one is only ever constructed and read from code-behind.
@@ -75,7 +78,8 @@ internal sealed record ComposeContext(
     string? InitialBody = null,
     bool SeedsSignature = true,
     IReadOnlyList<ComposerFileAttachment>? Attachments = null,
-    bool AttachmentsFailed = false)
+    bool AttachmentsFailed = false,
+    bool HoldsOnlyCopy = false)
 {
     /// <summary>The composer's heading, the action it is performing.</summary>
     public string Title => Kind switch

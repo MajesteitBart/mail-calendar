@@ -145,7 +145,8 @@ public sealed partial class MainWindow
             InitialBcc: request.Bcc,
             InitialSubject: request.Subject,
             InitialBody: request.BodyText,
-            SeedsSignature: false);
+            SeedsSignature: false,
+            HoldsOnlyCopy: true);
         if (await ConfirmDiscardDraftAsync())
         {
             // The composer lives in the mail surface's detail column, and Edit is reachable from
