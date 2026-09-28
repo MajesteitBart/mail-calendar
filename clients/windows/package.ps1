@@ -188,112 +188,114 @@ Write-Host "==> Using MSBuild ($msbuildArch): $msbuild" -ForegroundColor DarkGra
 #      Package.appxmanifest is committed UNBRANDED (docs/branding.md), the public default, while
 #      the Store matches the package name, the publisher GUID and the publisher display name
 #      against the Partner Center reservation and rejects anything else on ingestion. So the
-#      manifest is rewritten here and the committed bytes are restored by the `finally` around the
-#      build, exactly as the version stamp below already does.
+#      manifest is rewritten here and the committed bytes are restored by the `finally` after the
+#      build. That one `try` spans everything in between, so a certificate that cannot be minted or
+#      a version that cannot be stamped still leaves the tracked file as it was committed.
 #
 #      Before 4b deliberately: -Sign reads Identity/@Publisher back out of this file to choose the
 #      self-signed certificate, and a rebrand after that point would sign with one publisher and
 #      package under another.
-$manifest = Join-Path $here 'Mailcal/Package.appxmanifest'
-$manifestBackup = [System.IO.File]::ReadAllBytes($manifest)   # exact bytes, for a faithful restore
+#
 #      The rewrite is a Python script rather than PowerShell so it can be tested on any host
 #      (scripts/dev/tests/test_msix_manifest.py), nothing about a wrong MSIX identity fails
 #      locally; it fails at the Store, days later, having burned a submission. Windows installs
-#      Python under either name, so both are tried.
-$python = @('python3', 'python') |
-  ForEach-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+#      Python under either name, and puts a Microsoft Store alias under both that prints an install
+#      hint instead of running anything, so each name is asked for its version.
+$python = foreach ($name in 'python3', 'python') {
+  try {
+    $answer = (& $name --version 2>$null) -join ''
+    if ($LASTEXITCODE -eq 0 -and $answer -match '^Python 3') { $name; break }
+  }
+  catch { }
+}
 if (-not $python) { throw "Python 3 is required (it puts the brand into Package.appxmanifest)." }
+$manifest = Join-Path $here 'Mailcal/Package.appxmanifest'
+$manifestBackup = [System.IO.File]::ReadAllBytes($manifest)   # exact bytes, for a faithful restore
 try {
-  & $python.Source (Join-Path $root 'scripts/dev/msix_manifest.py') `
+  & $python (Join-Path $root 'scripts/dev/msix_manifest.py') `
     --manifest $manifest --channel $Channel.ToLowerInvariant()
   if ($LASTEXITCODE -ne 0) { throw "putting the brand into Package.appxmanifest failed" }
-}
-catch {
-  [System.IO.File]::WriteAllBytes($manifest, $manifestBackup)
-  throw
-}
-$brandedName = ([xml](Get-Content $manifest)).Package.Properties.DisplayName
-$brandedIdentity = ([xml](Get-Content $manifest)).Package.Identity.Name
-# The channel is named here because the identity alone does not say which one this is, and the
-# release workflow reads this line back to prove the brand reached the build.
-Write-Host "==> Packaging as '$brandedName' ($brandedIdentity) for the $Channel channel" -ForegroundColor Cyan
+  $brandedName = ([xml](Get-Content $manifest)).Package.Properties.DisplayName
+  $brandedIdentity = ([xml](Get-Content $manifest)).Package.Identity.Name
+  # The channel is named here because the identity alone does not say which one this is, and the
+  # release workflow reads this line back to prove the brand reached the build.
+  Write-Host "==> Packaging as '$brandedName' ($brandedIdentity) for the $Channel channel" -ForegroundColor Cyan
 
-# 4b. Signing. The Store upload is unsigned (Microsoft signs on ingestion) and can't be installed
-#     locally. -Sign self-signs with a throwaway dev cert whose subject matches the manifest
-#     Publisher, and switches to SideloadOnly so the _Test set carries a .cer + Add-AppDevPackage.ps1.
-#     Reuses a matching cert if present, else mints one in CurrentUser\My. Local testing ONLY.
-$signArgs = @('/p:AppxPackageSigningEnabled=false')
-if ($Sign) {
-  $PackageMode = 'SideloadOnly'
-  $publisher = ([xml](Get-Content (Join-Path $here 'Mailcal/Package.appxmanifest'))).Package.Identity.Publisher
-  $cert = Get-ChildItem Cert:\CurrentUser\My |
-  Where-Object { $_.Subject -eq $publisher -and $_.HasPrivateKey } | Select-Object -First 1
-  if (-not $cert) {
-    Write-Host "==> Minting self-signed dev cert ($publisher)" -ForegroundColor Yellow
-    $cert = New-SelfSignedCertificate -Type Custom -Subject $publisher -KeyUsage DigitalSignature `
-      -CertStoreLocation Cert:\CurrentUser\My `
-      -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+  # 4b. Signing. The Store upload is unsigned (Microsoft signs on ingestion) and can't be installed
+  #     locally. -Sign self-signs with a throwaway dev cert whose subject matches the manifest
+  #     Publisher, and switches to SideloadOnly so the _Test set carries a .cer + Add-AppDevPackage.ps1.
+  #     Reuses a matching cert if present, else mints one in CurrentUser\My. Local testing ONLY.
+  $signArgs = @('/p:AppxPackageSigningEnabled=false')
+  if ($Sign) {
+    $PackageMode = 'SideloadOnly'
+    $publisher = ([xml](Get-Content (Join-Path $here 'Mailcal/Package.appxmanifest'))).Package.Identity.Publisher
+    $cert = Get-ChildItem Cert:\CurrentUser\My |
+    Where-Object { $_.Subject -eq $publisher -and $_.HasPrivateKey } | Select-Object -First 1
+    if (-not $cert) {
+      Write-Host "==> Minting self-signed dev cert ($publisher)" -ForegroundColor Yellow
+      $cert = New-SelfSignedCertificate -Type Custom -Subject $publisher -KeyUsage DigitalSignature `
+        -CertStoreLocation Cert:\CurrentUser\My `
+        -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+    }
+    Write-Host "==> Signing with dev cert ($($cert.Thumbprint))" -ForegroundColor Cyan
+    $signArgs = @('/p:AppxPackageSigningEnabled=true', "/p:PackageCertificateThumbprint=$($cert.Thumbprint)")
   }
-  Write-Host "==> Signing with dev cert ($($cert.Thumbprint))" -ForegroundColor Cyan
-  $signArgs = @('/p:AppxPackageSigningEnabled=true', "/p:PackageCertificateThumbprint=$($cert.Thumbprint)")
-}
 
-# 4c. Auto-version the sideload build (unless -Version pins one). MSIX refuses to reinstall the
-#     same version with different content (0x80073CFB), so a fixed manifest version forces a
-#     manual remove-or-bump on every dev rebuild. A monotonically increasing Build.Revision makes
-#     each rebuild an in-place UPGRADE instead. MAJOR.MINOR come from /VERSION ($semver) so the
-#     sideload package version tracks the single source of truth (docs/versioning.md), not a stale
-#     literal; Build.Revision then carry a monotonic timestamp, which consumes both remaining fields
-#     so the semver PATCH is not represented in the *package* version. That's fine: the assembly
-#     <Version> below still carries the full /VERSION semver, which is what DeviceFacts.cs reports.
-#     Scheme (each field must be <= 65535): Build = days since 2000-01-01 (< 65535 until ~2179),
-#     Revision = seconds-since-midnight / 2 (< 43200), monotonic within a day and across days. The
-#     Store path keeps the deliberate Package.appxmanifest version; pass -Version to pin either path.
-if ($Sign -and -not $Version) {
-  $now = Get-Date
-  $build = ($now.Date - [datetime]'2000-01-01').Days
-  $rev = [int]($now.TimeOfDay.TotalSeconds / 2)
-  $mm = $semver -split '\.'   # /VERSION MAJOR.MINOR.PATCH, validated above, take MAJOR.MINOR, not a hardcoded 1.0
-  $Version = "$($mm[0]).$($mm[1]).$build.$rev"
-  Write-Host "==> Auto-versioning sideload build: $Version (rebuild => in-place upgrade)" -ForegroundColor DarkGray
-}
+  # 4c. Auto-version the sideload build (unless -Version pins one). MSIX refuses to reinstall the
+  #     same version with different content (0x80073CFB), so a fixed manifest version forces a
+  #     manual remove-or-bump on every dev rebuild. A monotonically increasing Build.Revision makes
+  #     each rebuild an in-place UPGRADE instead. MAJOR.MINOR come from /VERSION ($semver) so the
+  #     sideload package version tracks the single source of truth (docs/versioning.md), not a stale
+  #     literal; Build.Revision then carry a monotonic timestamp, which consumes both remaining fields
+  #     so the semver PATCH is not represented in the *package* version. That's fine: the assembly
+  #     <Version> below still carries the full /VERSION semver, which is what DeviceFacts.cs reports.
+  #     Scheme (each field must be <= 65535): Build = days since 2000-01-01 (< 65535 until ~2179),
+  #     Revision = seconds-since-midnight / 2 (< 43200), monotonic within a day and across days. The
+  #     Store path keeps the deliberate Package.appxmanifest version; pass -Version to pin either path.
+  if ($Sign -and -not $Version) {
+    $now = Get-Date
+    $build = ($now.Date - [datetime]'2000-01-01').Days
+    $rev = [int]($now.TimeOfDay.TotalSeconds / 2)
+    $mm = $semver -split '\.'   # /VERSION MAJOR.MINOR.PATCH, validated above, take MAJOR.MINOR, not a hardcoded 1.0
+    $Version = "$($mm[0]).$($mm[1]).$build.$rev"
+    Write-Host "==> Auto-versioning sideload build: $Version (rebuild => in-place upgrade)" -ForegroundColor DarkGray
+  }
 
-# 5. Stamp the version into Package.appxmanifest. Single-project MSIX packaging reads the package
-#    version straight from the manifest's Identity/@Version, a build property (AppxPackageVersion)
-#    is silently ignored here, bundle AND inner packages stay at the manifest's value. So write the
-#    version into the manifest; the committed bytes go back after the build (the try/finally below),
-#    which also undoes the rebrand from 4a2 and leaves the working tree clean.
-if ($Version) {
-  $current = [System.IO.File]::ReadAllText($manifest)
-  $stamped = ($current -replace '(<Identity\b[^>]*?\bVersion=")[^"]*(")', "`${1}$Version`${2}")
-  [System.IO.File]::WriteAllText($manifest, $stamped, (New-Object System.Text.UTF8Encoding($false)))
-  Write-Host "==> Stamped package version $Version into Package.appxmanifest (restored after build)" -ForegroundColor DarkGray
-}
+  # 5. Stamp the version into Package.appxmanifest. Single-project MSIX packaging reads the package
+  #    version straight from the manifest's Identity/@Version, a build property (AppxPackageVersion)
+  #    is silently ignored here, bundle AND inner packages stay at the manifest's value. So write the
+  #    version into the manifest; the committed bytes go back after the build (the try/finally below),
+  #    which also undoes the rebrand from 4a2 and leaves the working tree clean.
+  if ($Version) {
+    $current = [System.IO.File]::ReadAllText($manifest)
+    $stamped = ($current -replace '(<Identity\b[^>]*?\bVersion=")[^"]*(")', "`${1}$Version`${2}")
+    [System.IO.File]::WriteAllText($manifest, $stamped, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "==> Stamped package version $Version into Package.appxmanifest (restored after build)" -ForegroundColor DarkGray
+  }
 
-# 6. Build the dual-arch MSIX bundle. -p:Packaged=true flips the csproj to the MSIX /
-#    framework-dependent-WinAppSDK / self-contained-.NET shape; UapAppxPackageBuildMode picks the
-#    output (.msixupload for the Store, or a sideload _Test set for -Sign).
-$msbuildArgs = @(
-  $proj, '/restore', '/v:minimal',
-  '/p:Packaged=true',
-  '/p:Configuration=Release',
-  '/p:Platform=x64',
-  '/p:AppxBundle=Always',
-  '/p:AppxBundlePlatforms=x64|arm64',
-  "/p:UapAppxPackageBuildMode=$PackageMode",
-  '/p:GenerateAppxPackageOnBuild=true',
-  # Assembly version = the /VERSION marketing string (what DeviceFacts.cs reports). The csproj reads
-  # /VERSION for this too; passing it explicitly keeps the two identical regardless. The 4-part MSIX
-  # package version is a separate thing, stamped into Package.appxmanifest by step 5 above.
-  "/p:Version=$semver"
-) + $signArgs
-Write-Host "==> Building the MSIX bundle (x64|arm64, $PackageMode)" -ForegroundColor Cyan
-try {
+  # 6. Build the dual-arch MSIX bundle. -p:Packaged=true flips the csproj to the MSIX /
+  #    framework-dependent-WinAppSDK / self-contained-.NET shape; UapAppxPackageBuildMode picks the
+  #    output (.msixupload for the Store, or a sideload _Test set for -Sign).
+  $msbuildArgs = @(
+    $proj, '/restore', '/v:minimal',
+    '/p:Packaged=true',
+    '/p:Configuration=Release',
+    '/p:Platform=x64',
+    '/p:AppxBundle=Always',
+    '/p:AppxBundlePlatforms=x64|arm64',
+    "/p:UapAppxPackageBuildMode=$PackageMode",
+    '/p:GenerateAppxPackageOnBuild=true',
+    # Assembly version = the /VERSION marketing string (what DeviceFacts.cs reports). The csproj reads
+    # /VERSION for this too; passing it explicitly keeps the two identical regardless. The 4-part MSIX
+    # package version is a separate thing, stamped into Package.appxmanifest by step 5 above.
+    "/p:Version=$semver"
+  ) + $signArgs
+  Write-Host "==> Building the MSIX bundle (x64|arm64, $PackageMode)" -ForegroundColor Cyan
   & $msbuild @msbuildArgs
   if ($LASTEXITCODE -ne 0) { throw "MSIX bundle build failed (exit $LASTEXITCODE)" }
 }
 finally {
-  if ($null -ne $manifestBackup) { [System.IO.File]::WriteAllBytes($manifest, $manifestBackup) }
+  [System.IO.File]::WriteAllBytes($manifest, $manifestBackup)
 }
 
 # 6b. Gate the SHIPPED container, not just the cdylibs under target/. Those are only the files
