@@ -84,7 +84,10 @@ if (Bun.argv.includes("--check")) {
   const existing = await Bun.file(OUTPUT)
     .text()
     .catch(() => "");
-  if (existing !== rendered) {
+  // Compared as text: a Windows checkout with core.autocrlf holds this file and its sources with
+  // CRLF endings, which git stores as LF, so the line endings alone are not staleness.
+  const lf = (text: string) => text.replaceAll("\r\n", "\n");
+  if (lf(existing) !== lf(rendered)) {
     console.error(
       "clients/composer/dist/editor.html is stale: it does not match src/.\n" +
         "Rebuild it with:  cd clients/composer && bun run build",
