@@ -317,9 +317,11 @@ pub(crate) fn python3() -> Option<&'static str> {
 
 /// Whether a `--version` answer is a Python 3's. Python 2 printed its version to stderr.
 fn says_python3(stdout: &[u8], stderr: &[u8]) -> bool {
-    [stdout, stderr]
-        .iter()
-        .any(|text| String::from_utf8_lossy(text).trim_start().starts_with("Python 3"))
+    [stdout, stderr].iter().any(|text| {
+        String::from_utf8_lossy(text)
+            .trim_start()
+            .starts_with("Python 3")
+    })
 }
 
 /// Whether a program can be run, by asking it rather than by looking for its name.
