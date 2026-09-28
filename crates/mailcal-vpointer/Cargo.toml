@@ -13,7 +13,9 @@ license.workspace = true
 #
 # Why this exists at all rather than a packaged tool: `wlrctl` speaks the same protocol and cannot
 # do the job. See src/main.rs.
-[dependencies]
+#
+# Linux only: the Wayland crates do not compile on Windows, and a `--workspace` build there has to.
+[target.'cfg(target_os = "linux")'.dependencies]
 wayland-client = { workspace = true }
 wayland-protocols-wlr = { workspace = true }
 
