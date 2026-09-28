@@ -41,6 +41,7 @@ question only that OS can. The core supplies the running version through `AboutI
 |---|---|---|:---:|
 | **Windows**, Microsoft Store | the Store | Settings → About → Updates, in place | ✅ |
 | **Windows**, our own download | App Installer, from the `.appinstaller` ([`windows-channels.md`](windows-channels.md)) | Settings → About → Updates, in place | ✅ |
+| **Windows**, installed from a package file | nothing: a newer package, installed the same way | Settings → About → Updates says so, and offers no check | ✅ |
 | **macOS**, Mac App Store | the App Store | ⬜ | ⬜ |
 | **iOS / iPadOS** | the App Store | ⬜ | ⬜ |
 | **Android**, Google Play | Play | ⬜ | ⬜ |
@@ -53,10 +54,11 @@ rather than a defect.
 
 ### Windows
 
-`Package.Current.GetAppInstallerInfo()` is the discriminator, and it is the platform's own answer
-rather than an inference: a package installed from an `.appinstaller` has one, and every other
-packaged build has none. Reading the identity name instead would be a guess, wrong for a
-hand-sideloaded build, which is exactly the build a support question comes from.
+Two discriminators, both the platform's own answers rather than inferences:
+`Package.Current.GetAppInstallerInfo()`, which a package installed from an `.appinstaller` has and
+no other does, and `Package.Current.SignatureKind`, which is `Store` only for a package the Store
+signed. Reading the identity name instead would be a guess, wrong for a hand-sideloaded build,
+which is exactly the build a support question comes from.
 
 - **Hosted**: `Package.Current.CheckUpdateAvailabilityAsync()`. It asks; it does not download. The
   copy therefore says an update installs at the next start, because that is what happens. A link to
@@ -74,6 +76,9 @@ hand-sideloaded build, which is exactly the build a support question comes from.
   asks App Installer about a URL the Store never gave us, and `StoreContext` asks the Store's
   licensing service about a product it has no record of for a hosted copy. Either one pointed at
   the other's channel answers "nothing is waiting", forever and without erring.
+- **Installed from a package file** (neither of the above): nothing updates it, and the group
+  says so. It offers no check, because neither service holds this copy's updates and each would
+  answer "nothing is waiting".
 - **Unpackaged** (the dev loop): the group is absent. There is no package to replace, and a button
   that could only ever fail is worse than its absence.
 

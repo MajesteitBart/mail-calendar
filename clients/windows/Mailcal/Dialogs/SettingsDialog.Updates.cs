@@ -29,12 +29,22 @@ public sealed partial class SettingsDialog
     /// <summary>The Updates group, or <c>null</c> when nothing updates this build.</summary>
     private UIElement? BuildUpdates()
     {
-        var channel = Updates.ChannelFor(AppIdentity.IsPackaged, AppIdentity.UpdateSource);
+        var channel = Updates.ChannelFor(
+            AppIdentity.IsPackaged, AppIdentity.IsStoreSigned, AppIdentity.UpdateSource);
         if (channel == UpdateChannel.None)
         {
             // The unpackaged dev loop. There is no package to replace, and a button that always
             // failed would be worse than the absence of one.
             return null;
+        }
+        if (channel == UpdateChannel.Manual)
+        {
+            // Installed from a package file, so there is nobody to ask: say so, and offer no check
+            // whose only honest answer would be "could not tell".
+            var manual = new StackPanel { Spacing = 6 };
+            manual.Children.Add(Heading(L10n.AboutUpdatesHeading()));
+            manual.Children.Add(Description(L10n.AboutUpdatesDescriptionManual()));
+            return manual;
         }
 
         var hosted = channel == UpdateChannel.Hosted;

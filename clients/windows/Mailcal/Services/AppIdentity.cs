@@ -113,6 +113,25 @@ internal static class AppIdentity
     /// </summary>
     public static Uri? UpdateSource => Installer.Value;
 
+    // Whether the Store signed this package, which is what makes it the Store's to update. A
+    // package sideloaded from a bare .msixbundle has no `.appinstaller` either, so without this it
+    // is indistinguishable from a Store install.
+    private static readonly Lazy<bool> StoreSigned = new(() =>
+    {
+        try
+        {
+            return Windows.ApplicationModel.Package.Current.SignatureKind
+                == Windows.ApplicationModel.PackageSignatureKind.Store;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    });
+
+    /// <summary>Whether the Microsoft Store signed this package; <c>false</c> unpackaged.</summary>
+    public static bool IsStoreSigned => StoreSigned.Value;
+
     /// <summary>Ask Windows whether a newer version is waiting at <see cref="UpdateSource"/>.</summary>
     /// <remarks>
     /// This asks; it does not download. App Installer fetches on its own schedule and applies the

@@ -6,8 +6,8 @@
 // there is nothing newer, forever, by a check that was asking the wrong service.
 //
 // Every case is decided by `Package.Current`, which throws or answers differently in each shape and
-// cannot be exercised from a plain net10.0 suite. So the resolution is a pure function over the two
-// facts, and this is where they are pinned.
+// cannot be exercised from a plain net10.0 suite. So the resolution is a pure function over the
+// three facts, and this is where they are pinned.
 
 using System;
 using Allodia.Mailcal.Services;
@@ -17,12 +17,16 @@ namespace Mailcal.Tests;
 
 public class UpdatesTests
 {
+    private static readonly Uri Installer = new("https://d/x.appinstaller");
+
     [Fact]
     public void TheDevLoopHasNothingToUpdate()
     {
         // Unpackaged: there is no package to replace. The group is absent rather than showing a
         // button that could only ever fail.
-        Assert.Equal(UpdateChannel.None, Updates.ChannelFor(packaged: false, updateSource: null));
+        Assert.Equal(
+            UpdateChannel.None,
+            Updates.ChannelFor(packaged: false, storeSigned: false, updateSource: null));
     }
 
     [Fact]
@@ -32,15 +36,15 @@ public class UpdatesTests
         // must not promote a build that has no package identity.
         Assert.Equal(
             UpdateChannel.None,
-            Updates.ChannelFor(packaged: false, updateSource: new Uri("https://d/x.appinstaller")));
+            Updates.ChannelFor(packaged: false, storeSigned: false, updateSource: Installer));
     }
 
     [Fact]
-    public void APackageWithNoInstallerFileBelongsToTheStore()
+    public void APackageTheStoreSignedBelongsToTheStore()
     {
-        // The Store's own packages carry no `.appinstaller`, so this is how a Store install is
-        // told apart from ours without reading the brand.
-        Assert.Equal(UpdateChannel.Store, Updates.ChannelFor(packaged: true, updateSource: null));
+        Assert.Equal(
+            UpdateChannel.Store,
+            Updates.ChannelFor(packaged: true, storeSigned: true, updateSource: null));
     }
 
     [Fact]
@@ -48,7 +52,17 @@ public class UpdatesTests
     {
         Assert.Equal(
             UpdateChannel.Hosted,
-            Updates.ChannelFor(packaged: true, updateSource: new Uri("https://d/x.appinstaller")));
+            Updates.ChannelFor(packaged: true, storeSigned: false, updateSource: Installer));
+    }
+
+    [Fact]
+    public void APackageSideloadedFromAFileIsNotTheStores()
+    {
+        // No `.appinstaller` and not signed by the Store: a bundle installed by hand. Asking the
+        // Store about it answers "nothing is waiting", forever, so nothing may claim to update it.
+        Assert.Equal(
+            UpdateChannel.Manual,
+            Updates.ChannelFor(packaged: true, storeSigned: false, updateSource: null));
     }
 
     [Fact]

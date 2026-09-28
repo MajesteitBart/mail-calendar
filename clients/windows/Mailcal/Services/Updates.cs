@@ -23,6 +23,10 @@ internal enum UpdateChannel
 
     /// <summary>The Microsoft Store, which owns what it installed.</summary>
     Store,
+
+    /// <summary>Nothing does: a package installed from a file, with no `.appinstaller` behind it.
+    /// Only installing a newer package replaces it.</summary>
+    Manual,
 }
 
 /// <summary>What a check found, in the three terms the About page draws.</summary>
@@ -37,15 +41,17 @@ internal static class Updates
 {
     /// <summary>Which mechanism keeps this installation current.</summary>
     /// <remarks>
-    /// The discriminator is the platform's own answer rather than the brand: a package installed
-    /// from an `.appinstaller` has one, and every other packaged build has none. Reading the
-    /// identity name instead would be a guess that is wrong for a hand-sideloaded build, and it is
-    /// exactly the build a support question comes from.
+    /// Both discriminators are the platform's own answers rather than the brand: a package installed
+    /// from an `.appinstaller` has one, and only a package the Store signed is the Store's. Reading
+    /// the identity name instead would be a guess that is wrong for a hand-sideloaded build, and it
+    /// is exactly the build a support question comes from. Such a build has neither, and asking the
+    /// Store about it answers "nothing is waiting", forever and without erring.
     /// </remarks>
-    internal static UpdateChannel ChannelFor(bool packaged, Uri? updateSource) =>
+    internal static UpdateChannel ChannelFor(bool packaged, bool storeSigned, Uri? updateSource) =>
         !packaged ? UpdateChannel.None
-        : updateSource is null ? UpdateChannel.Store
-        : UpdateChannel.Hosted;
+        : updateSource is not null ? UpdateChannel.Hosted
+        : storeSigned ? UpdateChannel.Store
+        : UpdateChannel.Manual;
 
     /// <summary>The log line written as a check starts.</summary>
     internal static string CheckStartedLine(UpdateChannel channel) =>

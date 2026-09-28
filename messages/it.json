@@ -757,6 +757,7 @@
 	"about_updates_heading": "Aggiornamenti",
 	"about_updates_description_hosted": "{app_name} cerca una nuova versione ogni poche ore e all'avvio. Un aggiornamento viene installato al successivo avvio dell'app.",
 	"about_updates_description_store": "Microsoft Store mantiene {app_name} aggiornata.",
+	"about_updates_description_manual": "Questa copia di {app_name} è stata installata da un file di pacchetto, quindi niente la aggiorna. Installa un pacchetto più recente per aggiornarla.",
 	"about_updates_action": "Controlla ora",
 	"about_updates_checking": "Controllo in corso…",
 	"about_updates_current": "Questa è la versione più recente.",
