@@ -41,8 +41,16 @@ fail() { echo "error: $*" >&2; exit 1; }
 # release runs. `package.sh`, the only caller, already requires python3, so the release path gains
 # no dependency; plistlib reads binary and XML plists, as PlistBuddy did. A missing key, an
 # unreadable file and a corrupt plist all yield the empty string, exactly as before.
+#
+# The interpreter is asked for its version rather than found by name: on Windows the python.org
+# install is `python`, and `python3` there is a Microsoft Store alias that runs nothing.
+PYTHON=""
+for candidate in python3 python; do
+  if "$candidate" --version 2>/dev/null | grep -q '^Python 3'; then PYTHON="$candidate"; break; fi
+done
+
 read_bundle_executable() {
-  python3 - "$1" 2>/dev/null <<'PY' || true
+  "${PYTHON:-python3}" - "$1" 2>/dev/null <<'PY' || true
 import plistlib, sys
 
 try:
