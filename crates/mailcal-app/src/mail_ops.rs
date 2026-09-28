@@ -222,7 +222,7 @@ impl<P: Provider> App<P> {
             write.destination(),
         );
         // Republish immediately so the row leaves the list before the network round-trip.
-        self.rebuild_snapshot().await;
+        self.publish_snapshot().await;
         let applied = self.apply_only(&message.account, &write).await;
         if !applied {
             // The write didn't apply (no provider, or a rejected/stale write); undo the hide

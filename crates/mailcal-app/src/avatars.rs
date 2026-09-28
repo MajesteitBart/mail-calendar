@@ -255,18 +255,17 @@ impl<P: Provider> App<P> {
     }
 
     /// Fetches one card resource's photo through the account's contacts adapter.
+    ///
+    /// Through an owned handle rather than the account list's guard: the fetch can take a
+    /// minute of retries, and a queued writer makes every later reader wait behind it.
     async fn photo_from_provider(
         &self,
         account: &engine_api::AccountId,
         card: &ContactCard,
         media: &ContactResource,
     ) -> Option<PhotoState> {
-        let accounts = self.accounts.read().await;
-        let provider = accounts
-            .iter()
-            .find(|candidate| &candidate.id == account)?
-            .contact_providers
-            .first()?;
+        let handle = self.account_handle(account).await?;
+        let provider = handle.contact_providers.first()?;
         let fetched = self
             .engine
             .contact_photo(provider, account, card, media)
@@ -420,3 +419,7 @@ mod contacts_tests;
 #[cfg(test)]
 #[path = "avatars_sniff_tests.rs"]
 mod sniff_tests;
+
+#[cfg(test)]
+#[path = "avatars_parked_tests.rs"]
+mod parked_tests;

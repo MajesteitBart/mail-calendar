@@ -256,7 +256,7 @@ impl<P: Provider> App<P> {
     /// whole cost; one swipe, one refresh, and a person cannot swipe fast enough to matter. An
     /// agent can: fifty scripted archives would be fifty syncs against the user's own server,
     /// which is a denial of service the user paid for. So a write inside the window re-projects
-    /// the list from what is already in memory (`rebuild_snapshot`, no network) instead.
+    /// the list from what is already in memory (`publish_snapshot`, no network) instead.
     ///
     /// Nothing is lost by skipping the sync. The row is already hidden optimistically, the edit
     /// has already reached the provider (that is what the tool result reports), and the next
@@ -283,7 +283,7 @@ impl<P: Provider> App<P> {
         if due {
             self.refresh_after_write(account).await;
         } else {
-            self.rebuild_snapshot().await;
+            self.publish_snapshot().await;
         }
     }
 }

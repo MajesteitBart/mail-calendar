@@ -15,7 +15,7 @@ use std::{
     time::Instant,
 };
 
-use engine_api::{AccountId, MailListRow, MailboxRole, Provider};
+use engine_api::{AccountId, CanonicalEmail, MailListRow, MailboxRole, Provider};
 use mailcal_viewmodel::{AccountMessage, AccountRow, MailboxListSnapshot, ViewMode, view};
 
 use crate::{App, CachedRows, Scope};
@@ -74,6 +74,15 @@ impl<P: Provider> App<P> {
             .await;
     }
 
+    /// [`rebuild_snapshot`](Self::rebuild_snapshot) without the photo pass after it, for a
+    /// caller with a write still to apply: the pass waits on providers, and the write must not
+    /// wait behind it. The senders it leaves unresolved stay queued for the next rebuild.
+    pub(crate) async fn publish_snapshot(&self) {
+        let search = self.search_state();
+        self.publish_list(search.query.as_deref(), search.generation)
+            .await;
+    }
+
     /// [`rebuild_snapshot`](Self::rebuild_snapshot) for one captured search: the list is built,
     /// then published **only** if no newer search has landed while it was being built.
     ///
@@ -82,6 +91,12 @@ impl<P: Provider> App<P> {
     /// *older* one carried reproduces the race exactly, without having to win a scheduling
     /// coin-toss for it.
     pub(crate) async fn rebuild_snapshot_for(&self, query: Option<&str>, generation: u64) {
+        let unresolved = self.publish_list(query, generation).await;
+        self.resolve_sender_photos(unresolved).await;
+    }
+
+    /// Builds and publishes the list, returning the senders whose photo nobody has looked up.
+    async fn publish_list(&self, query: Option<&str>, generation: u64) -> Vec<CanonicalEmail> {
         let start = Instant::now();
         let account_rows = self.account_rows().await;
         // One read of one lock: the account and the folder are one value, so a snapshot can
@@ -126,14 +141,14 @@ impl<P: Provider> App<P> {
                  dropped",
                 start.elapsed().as_millis(),
             );
-            return;
+            return Vec::new();
         }
         self.mailbox_list.publish(snapshot);
         log::info!(
             "rebuild_snapshot: {rows} row(s) of {total} in {}ms",
             start.elapsed().as_millis(),
         );
-        self.resolve_sender_photos(unresolved).await;
+        unresolved
     }
 
     /// The mailbox list for the current selection.

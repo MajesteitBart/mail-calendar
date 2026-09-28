@@ -165,7 +165,7 @@ impl<P: Provider> App<P> {
             return;
         }
         self.hide_optimistically(account, &keys, destination.as_ref());
-        self.rebuild_snapshot().await;
+        self.publish_snapshot().await;
         for key in &keys {
             let edit = match &destination {
                 Some(destination) => MailEdit::move_to(key.clone(), destination.clone()),
