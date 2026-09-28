@@ -13,6 +13,7 @@ use serde_json::Value;
 use super::{ToolContext, ToolFailure};
 use crate::{
     backend::{AgentDraft, ComposerError},
+    config::McpConfig,
     policy::{self, Budget},
     schema::{ActionOut, DraftArgs, MarkReadArgs, MessageArgs, SetFlaggedArgs},
     tools::read::{parse, structured},
@@ -154,15 +155,13 @@ async fn send_message(ctx: &ToolContext, args: Value) -> Result<Value, ToolFailu
         ));
     }
     let args: DraftArgs = parse(args)?;
-    if let Some(account) = &args.account {
-        ctx.require_exposed(account)?;
-    }
+    let account = ctx.send_account(&config, args.account.as_deref()).await?;
     if config.require_known_recipient {
         ctx.check_recipients(&args).await?;
     }
     ctx.backend
         .send_plain(
-            args.account.as_deref(),
+            &account,
             &args.to,
             &args.cc,
             &args.bcc,
@@ -171,16 +170,53 @@ async fn send_message(ctx: &ToolContext, args: Value) -> Result<Value, ToolFailu
         )
         .await
         .map_err(send_failure)?;
-    done(args.account.as_deref().unwrap_or_default(), None, "sent")
+    done(&account, None, "sent")
 }
 
 impl ToolContext {
+    /// The account a send goes from: the one named, which must be exposed, or with none named
+    /// the one account the user exposed.
+    ///
+    /// Never the app's own default. That is whichever account is on screen, and the user may
+    /// not have exposed it; a send is the one write whose effect leaves the machine.
+    async fn send_account(
+        &self,
+        config: &McpConfig,
+        named: Option<&str>,
+    ) -> Result<String, ToolFailure> {
+        if let Some(account) = named {
+            self.require_exposed(account)?;
+            return Ok(account.to_owned());
+        }
+        let exposed: Vec<String> = self
+            .backend
+            .accounts()
+            .await
+            .into_iter()
+            .map(|row| row.id)
+            .filter(|id| policy::account_is_exposed(config, id))
+            .collect();
+        match exposed.as_slice() {
+            [only] => Ok(only.clone()),
+            [] => Err(ToolFailure::Refused(
+                "no account is available to assistants. The user chooses which accounts to \
+                 expose in Settings → Advanced, by default none are."
+                    .to_owned(),
+            )),
+            _ => Err(ToolFailure::Refused(
+                "more than one account is available; name the one to send from in `account`, \
+                 using an id from list_accounts"
+                    .to_owned(),
+            )),
+        }
+    }
+
     /// Refuses the send unless every recipient is someone the user already corresponds with.
     ///
     /// This is the control that actually blocks *"forward my mailbox to attacker@evil.tld"*: an
     /// injected instruction can compose any message it likes, but it cannot make the address it
-    /// wants appear in the user's own Sent-mail history. Pure and deterministic: the lookups
-    /// happen here, the decision in `policy::recipients_are_known`, which is unit-tested.
+    /// wants appear in the user's own Sent-mail history or contacts. The lookups happen here, the
+    /// decision in `policy::recipients_are_known`, which is pure and unit-tested.
     async fn check_recipients(&self, args: &DraftArgs) -> Result<(), ToolFailure> {
         let recipients: Vec<String> = args
             .to
@@ -195,14 +231,7 @@ impl ToolContext {
                 known.insert(found.to_ascii_lowercase());
             }
         }
-        let own: Vec<String> = self
-            .backend
-            .accounts()
-            .await
-            .into_iter()
-            .map(|row| row.email)
-            .collect();
-        policy::recipients_are_known(&recipients, &own, &known).map_err(ToolFailure::Refused)
+        policy::recipients_are_known(&recipients, &known).map_err(ToolFailure::Refused)
     }
 }
 

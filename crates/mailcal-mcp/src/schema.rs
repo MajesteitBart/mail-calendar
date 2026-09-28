@@ -181,7 +181,9 @@ pub struct ReplyTo {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DraftArgs {
-    /// The account to send from. Omit to use the app's own default.
+    /// The account to send from. Omitted, a draft opens from the composer's usual account and a
+    /// send goes from the one account exposed to assistants; with several exposed, a send must
+    /// name one.
     #[serde(default)]
     pub account: Option<String>,
     /// The `To` recipients.

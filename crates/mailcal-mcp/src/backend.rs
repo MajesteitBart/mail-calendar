@@ -113,10 +113,13 @@ pub trait MailBackend: Send + Sync + 'static {
     /// Moves a message to its account's Junk folder.
     async fn spam(&self, account: &str, key: &str) -> Result<(), MailActionError>;
 
-    /// Sends a plain-text message directly.
+    /// Sends a plain-text message directly from `account`.
+    ///
+    /// The account is always named: the app's own default is whichever account is on screen,
+    /// which need not be one the user exposed, so the tool resolves one before it gets here.
     async fn send_plain(
         &self,
-        account: Option<&str>,
+        account: &str,
         to: &[String],
         cc: &[String],
         bcc: &[String],

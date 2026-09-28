@@ -20,7 +20,6 @@ fn the_guard_accepts_someone_the_user_has_written_to() {
     assert_eq!(
         recipients_are_known(
             &["Colleague@Known.Example".to_owned()],
-            &["me@work.example".to_owned()],
             &known(&["colleague@known.example"]),
         ),
         Ok(()),
@@ -29,17 +28,50 @@ fn the_guard_accepts_someone_the_user_has_written_to() {
 }
 
 #[test]
-fn the_guard_accepts_anyone_at_the_users_own_domain() {
-    // The overwhelmingly common legitimate case: a colleague you have never personally emailed.
-    // Without this the guard would refuse most first internal messages and be turned off.
-    assert_eq!(
-        recipients_are_known(
-            &["newstarter@work.example".to_owned()],
-            &["me@work.example".to_owned()],
-            &HashSet::new(),
-        ),
-        Ok(()),
+fn a_stranger_at_the_users_own_domain_is_refused() {
+    // Sharing a domain says nothing about knowing someone: on gmail.com it is everyone with a
+    // mailbox there. The user's own address being known vouches for no address beside it.
+    let refusal = recipients_are_known(
+        &["stranger@gmail.com".to_owned()],
+        &known(&["me@gmail.com"]),
+    )
+    .expect_err("an address at the user's own domain is not known for that alone");
+    assert!(refusal.contains("stranger@gmail.com"), "{refusal}");
+}
+
+#[test]
+fn a_comma_joined_entry_is_refused_and_named() {
+    // One entry the provider would deliver to two people. Read whole, it is neither of them.
+    let entry = "attacker@evil.tld, colleague@work.example";
+    let refusal = recipients_are_known(&[entry.to_owned()], &known(&["colleague@work.example"]))
+        .expect_err("an entry holding two addresses is refused");
+    assert!(
+        refusal.contains(entry),
+        "the refusal names the entry: {refusal}"
     );
+}
+
+#[test]
+fn an_entry_that_is_not_one_bare_address_is_refused_even_when_the_index_matches_it() {
+    // The shape is checked before the index is consulted, so a lookup that happens to match a
+    // malformed entry cannot carry it through to a header that says something else.
+    for entry in [
+        "a@x.example; b@y.example",
+        "Colleague <colleague@known.example>",
+        "\"colleague\"@known.example",
+        "colleague@known.example (work)",
+        "colleague @known.example",
+        "colleague@known.example\nBcc: attacker@evil.tld",
+        "colleague@@known.example",
+        "colleague.known.example",
+        "@known.example",
+        "colleague@",
+    ] {
+        assert!(
+            recipients_are_known(&[entry.to_owned()], &known(&[entry])).is_err(),
+            "{entry:?} is not one bare address",
+        );
+    }
 }
 
 #[test]
@@ -49,7 +81,6 @@ fn the_guard_refuses_the_attack_it_exists_for() {
     // cannot do is make its address appear in the user's own Sent-mail history.
     let refusal = recipients_are_known(
         &["attacker@evil.tld".to_owned()],
-        &["me@work.example".to_owned()],
         &known(&["colleague@known.example"]),
     )
     .expect_err("an unknown recipient is refused");
@@ -73,23 +104,9 @@ fn one_unknown_recipient_refuses_the_whole_send() {
                 "colleague@known.example".to_owned(),
                 "attacker@evil.tld".to_owned(),
             ],
-            &["me@work.example".to_owned()],
             &known(&["colleague@known.example"]),
         )
         .is_err()
-    );
-}
-
-#[test]
-fn a_lookalike_domain_does_not_pass_as_the_users_own() {
-    assert!(
-        recipients_are_known(
-            &["me@work.example.evil.tld".to_owned()],
-            &["me@work.example".to_owned()],
-            &HashSet::new(),
-        )
-        .is_err(),
-        "the domain is compared whole, not by suffix",
     );
 }
 
@@ -141,7 +158,6 @@ fn a_blank_recipient_is_skipped_rather_than_refused() {
     assert_eq!(
         recipients_are_known(
             &["  ".to_owned(), "colleague@known.example".to_owned()],
-            &["me@work.example".to_owned()],
             &known(&["colleague@known.example"]),
         ),
         Ok(()),

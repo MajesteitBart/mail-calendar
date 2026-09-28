@@ -21,8 +21,8 @@ pub(crate) struct Recorder {
     pub(crate) writes: Vec<(String, String, String)>,
     /// Every draft opened.
     pub(crate) drafts: Vec<AgentDraft>,
-    /// Every message sent.
-    pub(crate) sends: Vec<Vec<String>>,
+    /// Every message sent, as `(account, to)`.
+    pub(crate) sends: Vec<(String, Vec<String>)>,
 }
 
 /// A backend over a fixed, tiny mailbox.
@@ -206,14 +206,18 @@ impl MailBackend for FakeBackend {
 
     async fn send_plain(
         &self,
-        _account: Option<&str>,
+        account: &str,
         to: &[String],
         _cc: &[String],
         _bcc: &[String],
         _subject: String,
         _body: String,
     ) -> Result<(), SendActionError> {
-        self.recorder.lock().unwrap().sends.push(to.to_vec());
+        self.recorder
+            .lock()
+            .unwrap()
+            .sends
+            .push((account.to_owned(), to.to_vec()));
         Ok(())
     }
 

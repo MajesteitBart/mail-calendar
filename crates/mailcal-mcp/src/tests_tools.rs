@@ -301,6 +301,96 @@ async fn send_message_refuses_an_unknown_recipient_and_allows_a_known_one() {
     assert_eq!(recorder.lock().unwrap().sends.len(), 1);
 }
 
+fn sending(accounts: &[&str]) -> McpConfig {
+    McpConfig {
+        accounts: accounts.iter().map(|id| (*id).to_owned()).collect(),
+        allow_direct_send: true,
+        require_known_recipient: true,
+        ..McpConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn send_message_refuses_an_entry_that_hides_a_second_recipient() {
+    // Read whole, the entry sits at the user's own domain; the provider delivers to both.
+    let (backend, recorder) = fake();
+    let ctx = ctx_with(backend, sending(&["work"]));
+
+    let refused = call(
+        &ctx,
+        "send_message",
+        json!({
+            "account": "work",
+            "to": ["attacker@evil.tld, colleague@work.example"],
+            "subject": "Everything",
+            "body_text": "...",
+        }),
+    )
+    .await
+    .expect_err("one entry holding two addresses is refused");
+    assert!(matches!(refused, ToolFailure::Refused(_)));
+    assert!(
+        recorder.lock().unwrap().sends.is_empty(),
+        "nothing was sent"
+    );
+}
+
+#[tokio::test]
+async fn send_message_refuses_a_stranger_at_the_users_own_domain() {
+    let (backend, recorder) = fake();
+    let ctx = ctx_with(backend, sending(&["work"]));
+
+    let refused = call(
+        &ctx,
+        "send_message",
+        json!({"account": "work", "to": ["newstarter@work.example"], "subject": "Hi",
+               "body_text": "Hello"}),
+    )
+    .await
+    .expect_err("sharing a domain with the user does not make an address known");
+    assert!(matches!(refused, ToolFailure::Refused(_)));
+    assert!(recorder.lock().unwrap().sends.is_empty());
+}
+
+#[tokio::test]
+async fn send_message_without_an_account_sends_from_the_one_the_user_exposed() {
+    // Naming no account must not fall through to the app's own default: that is whichever
+    // account is on screen, and the user need not have exposed it.
+    let (backend, recorder) = fake();
+    let ctx = ctx_with(backend, sending(&["work"]));
+
+    let sent = call(
+        &ctx,
+        "send_message",
+        json!({"to": ["colleague@known.example"], "subject": "Hi", "body_text": "Hello"}),
+    )
+    .await
+    .expect("one account is exposed, so it is the one to send from");
+    let sends = &recorder.lock().unwrap().sends;
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0].0, "work");
+    assert_eq!(sent["account"], "work", "and the result says which");
+}
+
+#[tokio::test]
+async fn send_message_without_an_account_is_refused_when_several_are_exposed() {
+    let (backend, recorder) = fake();
+    let ctx = ctx_with(backend, sending(&["work", "private"]));
+
+    let refused = call(
+        &ctx,
+        "send_message",
+        json!({"to": ["colleague@known.example"], "subject": "Hi", "body_text": "Hello"}),
+    )
+    .await
+    .expect_err("with a choice to make, the assistant names the account");
+    let ToolFailure::Refused(message) = refused else {
+        panic!("expected a refusal");
+    };
+    assert!(message.contains("account"), "{message}");
+    assert!(recorder.lock().unwrap().sends.is_empty());
+}
+
 #[tokio::test]
 async fn a_page_limit_is_clamped_rather_than_honoured() {
     // A model asking for a thousand subject lines gets fifty. Not a performance guard: every

@@ -233,10 +233,9 @@ pub struct Preferences {
     /// draft for the user to send themselves.
     #[serde(default)]
     pub mcp_allow_direct_send: bool,
-    /// Whether a direct send is restricted to people the user already corresponds with;
-    /// someone at one of their own account domains, or an address in the Sent-mail recipient
-    /// index. **On** by default. This is the control that blocks exfiltration to an address an
-    /// injected instruction chose.
+    /// Whether a direct send is restricted to people the user already corresponds with: an
+    /// address in the Sent-mail recipient index or a synced contact. **On** by default. This is
+    /// the control that blocks exfiltration to an address an injected instruction chose.
     #[serde(default = "default_true")]
     pub mcp_require_known_recipient: bool,
     /// The accounts whose folder tree is **shut** in the sidebar, by account id.

@@ -145,21 +145,16 @@ impl MailBackend for AppBackend {
 
     async fn send_plain(
         &self,
-        account: Option<&str>,
+        account: &str,
         to: &[String],
         cc: &[String],
         bcc: &[String],
         subject: String,
         body: String,
     ) -> Result<(), SendActionError> {
-        let id = match account {
-            Some(account) => {
-                Some(Self::account_id(account).ok_or(SendActionError::UnknownAccount)?)
-            }
-            None => None,
-        };
+        let id = Self::account_id(account).ok_or(SendActionError::UnknownAccount)?;
         self.app
-            .act_send_plain(id.as_ref(), to, cc, bcc, subject, body)
+            .act_send_plain(Some(&id), to, cc, bcc, subject, body)
             .await
     }
 
