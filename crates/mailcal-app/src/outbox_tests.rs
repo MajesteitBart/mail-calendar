@@ -210,3 +210,46 @@ async fn reconnecting_sends_what_was_written_offline() {
         "coming back online must flush the queue"
     );
 }
+
+/// A queued send that goes out on reconnect but leaves no Sent copy raises the same standing
+/// question an inline send does. The drain is the only place that learns of it: the op settles
+/// as it reports, and a settled op is no longer in the outbox to be read back.
+///
+/// Answering the question files the copy and sends nothing: the fake counts one refused attempt
+/// and one delivery, and the repair adds neither.
+#[tokio::test(start_paused = true)]
+async fn a_queued_send_delivered_without_its_copy_raises_the_question() {
+    let provider = SubmitProvider::offline_then_filing_nothing(1);
+    let (refiles, submissions) = (provider.refiles(), provider.submissions());
+    let app = app_over(provider);
+    dispatch_until(&app, plain_send(), SendStatus::Queued)
+        .await
+        .await
+        .unwrap();
+    outbox_holding(&app, 1).await;
+    assert!(app.unfiled_copy().is_none());
+
+    app.dispatch(Intent::ReportNetworkReachable(false)).await;
+    app.dispatch(Intent::ReportNetworkReachable(true)).await;
+
+    assert!(
+        app.mailbox_list().outbox.is_empty(),
+        "the queued send went out"
+    );
+    let question = app
+        .unfiled_copy()
+        .expect("a delivered send with no Sent copy is never a silent success");
+    assert_eq!(question.subject, "Hi");
+    assert!(!question.retrying);
+    assert_eq!(submissions.lock().unwrap().len(), 2);
+
+    app.dispatch(Intent::RetryUnfiledCopy).await;
+
+    assert!(app.unfiled_copy().is_none(), "the copy is filed");
+    assert_eq!(*refiles.lock().unwrap(), 1);
+    assert_eq!(
+        submissions.lock().unwrap().len(),
+        2,
+        "the message was not sent a second time"
+    );
+}

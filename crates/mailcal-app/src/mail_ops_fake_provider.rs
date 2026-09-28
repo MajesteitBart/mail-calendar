@@ -111,6 +111,15 @@ impl SubmitProvider {
         provider
     }
 
+    /// As [`Self::offline_for`], but a send that gets through leaves no Sent copy: an IMAP
+    /// message queued offline whose `APPEND` then fails on the reconnected session.
+    pub(super) fn offline_then_filing_nothing(sends: u32) -> Self {
+        Self {
+            unfiled: true,
+            ..Self::offline_for(sends)
+        }
+    }
+
     /// A submitting provider whose every send fails with a permanent error carrying `detail`.
     pub(super) fn failing_with(detail: &str) -> Self {
         Self {

@@ -6,7 +6,9 @@
 //! decides only what a *person* is offered, and turns each refusal into something the app can
 //! say out loud rather than a silent no-op.
 
-use engine_api::{AccountId, OpRejection, Provider};
+use std::collections::HashMap;
+
+use engine_api::{AccountId, Draft, DrainOutcome, DrainReport, OpRejection, PendingOpId, Provider};
 
 use crate::{App, ComposeRequest, OutboxIntent, Scope, Surface, reference::QueuedRef};
 
@@ -133,6 +135,9 @@ impl<P: Provider> App<P> {
         let Some(provider) = acct.providers.first() else {
             return;
         };
+        // Read before the drain: an op settles as it is attempted, and a settled op is no
+        // longer in the outbox, so afterwards nothing can say which message went out unfiled.
+        let sends = self.queued_sends(account).await;
         match self.engine.drain_outbox(provider, account).await {
             Ok(report) if report.is_idle() => {}
             Ok(report) => {
@@ -144,9 +149,44 @@ impl<P: Provider> App<P> {
                 // A queued draft save that got through resolved to a key, and this report is
                 // the only place it is ever named (`docs/drafts.md`).
                 self.record_drained_drafts(&report);
+                self.note_drained_unfiled_copies(account, &report, &sends);
                 self.refresh_after_write(account).await;
             }
             Err(err) => log::warn!("outbox: a drain pass failed: {err}"),
+        }
+    }
+
+    /// The queued sends in `account`'s outbox, by op id.
+    async fn queued_sends(&self, account: &AccountId) -> HashMap<PendingOpId, Draft> {
+        let rows = self.engine.outbox(account).await.unwrap_or_default();
+        rows.iter()
+            .filter_map(|row| engine_api::queued_draft(row).map(|draft| (row.id, draft)))
+            .collect()
+    }
+
+    /// Raises the unfiled-copy question for every queued send the drain delivered without
+    /// filing its Sent copy (`docs/sending.md`). The question has one slot, so of several in
+    /// one pass the last is the one left standing, as on the inline path.
+    fn note_drained_unfiled_copies(
+        &self,
+        account: &AccountId,
+        report: &DrainReport,
+        sends: &HashMap<PendingOpId, Draft>,
+    ) {
+        for drained in &report.attempted {
+            let DrainOutcome::SentNotFiled { detail } = &drained.outcome else {
+                continue;
+            };
+            log::warn!(
+                "outbox: a queued send was delivered, but its Sent copy was not filed: {detail}"
+            );
+            match sends.get(&drained.id) {
+                Some(draft) => self.note_unfiled_copy(account, draft, detail),
+                None => log::warn!(
+                    "outbox: the message behind that send could not be read back, so there is no \
+                     copy to offer to file"
+                ),
+            }
         }
     }
 
