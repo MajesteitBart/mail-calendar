@@ -10,17 +10,12 @@
 //
 // macOS's Keychain (KeychainHelper.swift) keeps the same layout; Android (SecureStore.kt) seals
 // every account into one ordered document instead. Windows is the only store with a hard
-// per-entry size cap, so it alone self-chunks a large entry (see below).
-//
-// Windows caps one credential's blob at CRED_MAX_CREDENTIAL_BLOB_SIZE (2560 bytes), and a single
-// Microsoft refresh-token config can exceed that (tokens vary; CAE/claims/many-scopes push them
-// to 2–4 KB). So each entry is itself split across chunk credentials when needed. The advapi32
-// Cred* glue stays isolated here.
+// per-entry size cap, so it alone splits a large entry, and replaces a split one without a
+// half-written state (CredentialChunks). The advapi32 Cred* glue stays isolated here.
 
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 
 namespace Allodia.Mailcal.Services;
@@ -44,9 +39,8 @@ internal static class CredentialStore
 
     private const uint CRED_TYPE_GENERIC = 1;
     private const uint CRED_PERSIST_LOCAL_MACHINE = 2;
-    // Comfortably under the 2560-byte CRED_MAX_CREDENTIAL_BLOB_SIZE, so a chunk write never trips
-    // the cap (the very failure that used to silently drop Microsoft accounts).
-    private const int MaxChunkBytes = 2048;
+
+    private static readonly ICredentialSlots Slots = new CredManSlots();
 
     private static string AccountTarget(string id) => $"{_prefix}account:{id}";
 
@@ -68,7 +62,7 @@ internal static class CredentialStore
     public static string[] Configs()
     {
         return ReadIndex()
-            .Select(id => ReadChunked(AccountTarget(id)))
+            .Select(ReadConfig)
             .Where(config => config is not null)
             .Select(config => config!)
             .ToArray();
@@ -78,17 +72,16 @@ internal static class CredentialStore
     /// Stores <paramref name="config"/> for account <paramref name="id"/> in its own credential,
     /// replacing that account's entry (a reconnect / rotated token) and appending the id to the
     /// ordered index on first add, so the switcher stays stable. Returns whether the config and
-    /// the index both landed.
+    /// the index both landed; a refused write leaves the previous config stored whole.
     ///
-    /// It used to return nothing, which was defensible only while the caller had nothing to do
-    /// with the answer. The core now decides what a refused write means, rolling an add back, or
-    /// reporting a rotation it cannot recover from, so this has to be able to say no.
+    /// The core decides what a refusal means, rolling an add back, or reporting a rotation it
+    /// cannot recover from, so this has to be able to say no.
     /// </summary>
     public static bool Save(string id, string config)
     {
-        if (!WriteChunked(AccountTarget(id), config))
+        if (!CredentialChunks.Write(Slots, AccountTarget(id), config))
         {
-            return false; // WriteChunked logged the failure; don't index an unpersisted account.
+            return false; // don't index an account whose config did not land
         }
         var ids = ReadIndex();
         if (ids.Contains(id))
@@ -96,7 +89,7 @@ internal static class CredentialStore
             return true;
         }
         ids.Add(id);
-        return WriteChunked(IndexTarget, JsonSerializer.Serialize(ids));
+        return CredentialChunks.Write(Slots, IndexTarget, JsonSerializer.Serialize(ids));
     }
 
     /// <summary>
@@ -108,17 +101,28 @@ internal static class CredentialStore
     /// </summary>
     public static bool Remove(string id)
     {
-        // Delete chunk 0, then any overflow chunks, stopping at the first that doesn't exist.
-        for (var chunk = 0; CredDeleteW(ChunkTarget(AccountTarget(id), chunk), CRED_TYPE_GENERIC, 0); chunk++)
+        if (!CredentialChunks.Delete(Slots, AccountTarget(id)))
         {
+            return false;
         }
         var ids = ReadIndex();
-        return !ids.Remove(id) || WriteChunked(IndexTarget, JsonSerializer.Serialize(ids));
+        return !ids.Remove(id) || CredentialChunks.Write(Slots, IndexTarget, JsonSerializer.Serialize(ids));
+    }
+
+    private static string? ReadConfig(string id)
+    {
+        var config = CredentialChunks.Read(Slots, AccountTarget(id));
+        if (config is null)
+        {
+            // Never the id: it is an address and a host (docs/logging.md).
+            Log.Warn("credential store: an indexed account has no readable credential; skipped");
+        }
+        return config;
     }
 
     private static List<string> ReadIndex()
     {
-        var json = ReadChunked(IndexTarget);
+        var json = CredentialChunks.Read(Slots, IndexTarget);
         if (string.IsNullOrEmpty(json))
         {
             return new List<string>();
@@ -134,101 +138,66 @@ internal static class CredentialStore
         }
     }
 
-    // --- Chunked value read/write over a base target (chunk 0 = base, then ":1", ":2", …) -------
-    // A value larger than one credential's cap is split across successive credentials and
-    // reassembled on read; the bytes are joined before UTF-8 decode, so a multi-byte character
-    // straddling a chunk boundary still decodes.
-
-    private static string ChunkTarget(string baseTarget, int chunk) =>
-        chunk == 0 ? baseTarget : $"{baseTarget}:{chunk}";
-
-    private static string? ReadChunked(string baseTarget)
+    /// <summary>The Credential Manager, one generic credential per target.</summary>
+    private sealed class CredManSlots : ICredentialSlots
     {
-        var all = new List<byte>();
-        for (var chunk = 0; ; chunk++)
+        public byte[]? Read(string target)
         {
-            var bytes = ReadChunkBytes(ChunkTarget(baseTarget, chunk));
-            if (bytes is null)
-            {
-                break;
-            }
-            all.AddRange(bytes);
-        }
-        return all.Count == 0 ? null : Encoding.UTF8.GetString(all.ToArray());
-    }
-
-    // Writes value across as many chunks as needed, then drops any stale higher-index chunks from
-    // a previously larger value. Each CredWrite is checked, a swallowed failure here is exactly
-    // what used to lose Microsoft accounts, so a failure is logged loudly.
-    private static bool WriteChunked(string baseTarget, string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        var chunkCount = System.Math.Max(1, (bytes.Length + MaxChunkBytes - 1) / MaxChunkBytes);
-        for (var chunk = 0; chunk < chunkCount; chunk++)
-        {
-            var offset = chunk * MaxChunkBytes;
-            var length = System.Math.Min(MaxChunkBytes, bytes.Length - offset);
-            if (!WriteChunkBytes(ChunkTarget(baseTarget, chunk), bytes, offset, length))
-            {
-                Log.Error($"credential store: CredWrite failed for '{baseTarget}' chunk {chunk} of " +
-                          $"{chunkCount} (err {Marshal.GetLastWin32Error()}); not persisted");
-                return false;
-            }
-        }
-        for (var chunk = chunkCount; CredDeleteW(ChunkTarget(baseTarget, chunk), CRED_TYPE_GENERIC, 0); chunk++)
-        {
-        }
-        return true;
-    }
-
-    private static byte[]? ReadChunkBytes(string target)
-    {
-        if (!CredReadW(target, CRED_TYPE_GENERIC, 0, out var handle))
-        {
-            return null;
-        }
-        try
-        {
-            var cred = Marshal.PtrToStructure<CREDENTIAL>(handle);
-            if (cred.CredentialBlobSize == 0 || cred.CredentialBlob == IntPtr.Zero)
+            if (!CredReadW(target, CRED_TYPE_GENERIC, 0, out var handle))
             {
                 return null;
             }
-            var bytes = new byte[cred.CredentialBlobSize];
-            Marshal.Copy(cred.CredentialBlob, bytes, 0, (int)cred.CredentialBlobSize);
-            return bytes;
-        }
-        finally
-        {
-            CredFree(handle);
-        }
-    }
-
-    private static bool WriteChunkBytes(string target, byte[] bytes, int offset, int length)
-    {
-        var blobPtr = Marshal.AllocHGlobal(length);
-        var targetPtr = Marshal.StringToHGlobalUni(target);
-        var userPtr = Marshal.StringToHGlobalUni(UserLabel);
-        try
-        {
-            Marshal.Copy(bytes, offset, blobPtr, length);
-            var cred = new CREDENTIAL
+            try
             {
-                Type = CRED_TYPE_GENERIC,
-                TargetName = targetPtr,
-                CredentialBlobSize = (uint)length,
-                CredentialBlob = blobPtr,
-                Persist = CRED_PERSIST_LOCAL_MACHINE,
-                UserName = userPtr,
-            };
-            return CredWriteW(ref cred, 0);
+                var cred = Marshal.PtrToStructure<CREDENTIAL>(handle);
+                if (cred.CredentialBlobSize == 0 || cred.CredentialBlob == IntPtr.Zero)
+                {
+                    return null;
+                }
+                var bytes = new byte[cred.CredentialBlobSize];
+                Marshal.Copy(cred.CredentialBlob, bytes, 0, (int)cred.CredentialBlobSize);
+                return bytes;
+            }
+            finally
+            {
+                CredFree(handle);
+            }
         }
-        finally
+
+        public bool Write(string target, ReadOnlySpan<byte> bytes)
         {
-            Marshal.FreeHGlobal(blobPtr);
-            Marshal.FreeHGlobal(targetPtr);
-            Marshal.FreeHGlobal(userPtr);
+            var blobPtr = Marshal.AllocHGlobal(Math.Max(1, bytes.Length));
+            var targetPtr = Marshal.StringToHGlobalUni(target);
+            var userPtr = Marshal.StringToHGlobalUni(UserLabel);
+            try
+            {
+                Marshal.Copy(bytes.ToArray(), 0, blobPtr, bytes.Length);
+                var cred = new CREDENTIAL
+                {
+                    Type = CRED_TYPE_GENERIC,
+                    TargetName = targetPtr,
+                    CredentialBlobSize = (uint)bytes.Length,
+                    CredentialBlob = blobPtr,
+                    Persist = CRED_PERSIST_LOCAL_MACHINE,
+                    UserName = userPtr,
+                };
+                if (CredWriteW(ref cred, 0))
+                {
+                    return true;
+                }
+                // The error code only: the target names the account, which is an address.
+                Log.Error($"credential store: CredWrite refused an entry (err {Marshal.GetLastWin32Error()})");
+                return false;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(blobPtr);
+                Marshal.FreeHGlobal(targetPtr);
+                Marshal.FreeHGlobal(userPtr);
+            }
         }
+
+        public bool Delete(string target) => CredDeleteW(target, CRED_TYPE_GENERIC, 0);
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

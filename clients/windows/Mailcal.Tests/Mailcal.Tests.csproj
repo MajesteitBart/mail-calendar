@@ -140,6 +140,11 @@
          store rides (AppPathsTests), which must agree with the engine-store subdir. WinUI-free. -->
     <Compile Include="..\Mailcal\Services\AppPaths.cs" Link="Services\AppPaths.cs" />
     <Compile Include="..\Mailcal\Services\Updates.cs" Link="Services\Updates.cs" />
+    <!-- How a credential too large for one Credential Manager entry is split and replaced. The
+         failure it guards is silent until the next launch: a write refused part-way that left new
+         and old pieces together reads back as a config nobody wrote. P/Invoke-free on purpose;
+         CredentialStore is the advapi32 half. -->
+    <Compile Include="..\Mailcal\Services\CredentialChunks.cs" Link="Services\CredentialChunks.cs" />
     <!-- Which appearance a launch paints in: the DEBUG-only override, else the core's stored
          choice. The override is the lever the showcase and UI suites pull to photograph both
          themes without touching the developer's desktop, and a spelling it silently ignores would
